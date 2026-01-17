@@ -46,6 +46,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("dry-run", "d", false, "don't delete files (preview only)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "minimal output")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "debug output")
+	rootCmd.PersistentFlags().Bool("no-cache", false, "bypass cache, perform full scan")
 
 	// Bind flags to viper
 	_ = viper.BindPFlag("min_size", rootCmd.PersistentFlags().Lookup("min-size"))
@@ -56,6 +57,7 @@ func init() {
 	_ = viper.BindPFlag("dry_run", rootCmd.PersistentFlags().Lookup("dry-run"))
 	_ = viper.BindPFlag("quiet", rootCmd.PersistentFlags().Lookup("quiet"))
 	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	_ = viper.BindPFlag("no_cache", rootCmd.PersistentFlags().Lookup("no-cache"))
 }
 
 // initConfig reads in config file and environment variables.

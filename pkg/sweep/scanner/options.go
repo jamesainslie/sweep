@@ -4,6 +4,7 @@
 package scanner
 
 import (
+	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -32,6 +33,10 @@ type Options struct {
 	// OnProgress is called periodically with scan progress updates.
 	// It must be safe to call from multiple goroutines.
 	OnProgress func(types.ScanProgress)
+
+	// Cache is an optional cache for speeding up repeat scans.
+	// If nil, caching is disabled.
+	Cache *cache.Cache
 }
 
 // DefaultOptions returns options with sensible defaults for most systems.

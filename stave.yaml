@@ -1,0 +1,13 @@
+# Stave configuration for sweep
+# https://github.com/yaklabco/stave
+
+# Speed up compilation for git hooks
+hash_fast: true
+
+# Git hooks - run targets on git events
+hooks:
+  pre-commit:
+    - target: Fmt
+    - target: Lint
+  pre-push:
+    - target: Test

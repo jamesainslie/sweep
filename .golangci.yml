@@ -1,0 +1,404 @@
+version: "2"
+run:
+  tests: true
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - decorder
+    - dupl
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - fatcontext
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gocheckcompilerdirectives
+    - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - govet
+    - grouper
+    - inamedparam
+    - ineffassign
+    - interfacebloat
+    - intrange
+    - lll
+    - loggercheck
+    - maintidx
+    - makezero
+    - mirror
+    - misspell
+    - mnd
+    - musttag
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - perfsprint
+    - prealloc
+    - predeclared
+    - promlinter
+    - protogetter
+    - reassign
+    - revive
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - testableexamples
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - varnamelen
+    - wastedassign
+    - whitespace
+    - wrapcheck
+    - zerologlint
+  settings:
+    cyclop:
+      max-complexity: 30
+      package-average: 10
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - (github.com/spf13/viper).BindPFlag
+        - (github.com/spf13/viper).ReadInConfig
+        - (path/filepath).Match
+    funlen:
+      lines: 100
+      statements: 60
+      ignore-comments: true
+    gocognit:
+      min-complexity: 30
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+    gocyclo:
+      min-complexity: 30
+    gomodguard:
+      blocked:
+        modules:
+          - github.com/golang/protobuf:
+              recommendations:
+                - google.golang.org/protobuf
+              reason: see https://developers.google.com/protocol-buffers/docs/reference/go/faq#modules
+          - github.com/satori/go.uuid:
+              recommendations:
+                - github.com/google/uuid
+              reason: satori's package is not maintained
+          - github.com/gofrs/uuid:
+              recommendations:
+                - github.com/google/uuid
+              reason: gofrs' package is not go module
+    govet:
+      disable:
+        - fieldalignment
+      enable-all: true
+      settings:
+        shadow:
+          strict: false
+    lll:
+      line-length: 140
+      tab-width: 4
+    mnd:
+      ignored-numbers:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+        - "0o600"
+        - "0o644"
+        - "0o700"
+        - "0o755"
+    nestif:
+      min-complexity: 10
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-no-explanation:
+        - funlen
+        - gocognit
+        - lll
+    revive:
+      rules:
+        - name: argument-limit
+          arguments:
+            - 7
+          disabled: false
+        - name: atomic
+          disabled: false
+        - name: bare-return
+          disabled: false
+        - name: blank-imports
+          disabled: false
+        - name: bool-literal-in-expr
+          disabled: false
+        - name: call-to-gc
+          disabled: false
+        - name: constant-logical-expr
+          disabled: false
+        - name: context-as-argument
+          disabled: false
+        - name: context-keys-type
+          disabled: false
+        - name: datarace
+          disabled: false
+        - name: deep-exit
+          disabled: false
+        - name: defer
+          arguments:
+            - - call-chain
+              - loop
+          disabled: false
+        - name: dot-imports
+          disabled: false
+        - name: duplicated-imports
+          disabled: false
+        - name: early-return
+          arguments:
+            - preserveScope
+          disabled: false
+        - name: empty-block
+          disabled: false
+        - name: error-naming
+          disabled: false
+        - name: error-return
+          disabled: false
+        - name: error-strings
+          disabled: false
+        - name: errorf
+          disabled: false
+        - name: function-result-limit
+          arguments:
+            - 4
+          disabled: false
+        - name: get-return
+          disabled: false
+        - name: identical-branches
+          disabled: false
+        - name: if-return
+          disabled: false
+        - name: increment-decrement
+          disabled: false
+        - name: indent-error-flow
+          arguments:
+            - preserveScope
+          disabled: false
+        - name: import-alias-naming
+          arguments:
+            - ^[a-z][a-z0-9]{0,}$
+          disabled: false
+        - name: import-shadowing
+          disabled: false
+        - name: modifies-parameter
+          disabled: false
+        - name: modifies-value-receiver
+          disabled: false
+        - name: optimize-operands-order
+          disabled: false
+        - name: package-comments
+          disabled: false
+        - name: range
+          disabled: false
+        - name: range-val-in-closure
+          disabled: false
+        - name: range-val-address
+          disabled: false
+        - name: receiver-naming
+          disabled: false
+        - name: redundant-import-alias
+          disabled: false
+        - name: redefines-builtin-id
+          disabled: false
+        - name: string-of-int
+          disabled: false
+        - name: string-format
+          arguments:
+            - - fmt.Errorf[0]
+              - /(^|[^\.!?])$/
+              - must not end in punctuation
+            - - panic
+              - /^[^\n]*$/
+              - must not contain line breaks
+          disabled: false
+        - name: struct-tag
+          disabled: false
+        - name: superfluous-else
+          arguments:
+            - preserveScope
+          disabled: false
+        - name: time-equal
+          disabled: false
+        - name: time-naming
+          disabled: false
+        - name: var-naming
+          arguments:
+            - - ID
+            - - VM
+            - - upperCaseConst: true
+          disabled: false
+        - name: var-declaration
+          disabled: false
+        - name: unconditional-recursion
+          disabled: false
+        - name: unexported-naming
+          disabled: false
+        - name: unexported-return
+          disabled: false
+        - name: unhandled-error
+          arguments:
+            - fmt.Print
+            - fmt.Printf
+            - fmt.Println
+            - fmt.Fprintf
+            - fmt.Fprint
+            - fmt.Fprintln
+            - bytes.Buffer.Write
+            - bytes.Buffer.WriteByte
+            - bytes.Buffer.WriteString
+            - bytes.Buffer.WriteRune
+            - strings.Builder.WriteString
+            - strings.Builder.WriteRune
+            - strings.Builder.Write
+          disabled: false
+        - name: unnecessary-stmt
+          disabled: false
+        - name: unreachable-code
+          disabled: false
+        - name: unused-parameter
+          arguments:
+            - allowRegex: ^_
+          disabled: false
+        - name: useless-break
+          disabled: false
+        - name: waitgroup-by-value
+          disabled: false
+    varnamelen:
+      min-name-length: 2
+      check-type-param: false
+      check-receiver: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - govet
+        text: 'shadow: declaration of "(err|ctx)" shadows declaration at'
+      - linters:
+          - godot
+        source: (noinspection|TODO)
+      - linters:
+          - gocritic
+        source: //noinspection
+      - linters:
+          - bodyclose
+          - dupl
+          - funlen
+          - gochecknoglobals
+          - gochecknoinits
+          - goconst
+          - gosec
+          - noctx
+          - wrapcheck
+          - varnamelen
+          - mnd
+          - unparam
+          - unconvert
+        path: _test\.go$
+      - linters:
+          - forbidigo
+          - gochecknoglobals
+          - godot
+          - unparam
+          - wrapcheck
+        path: stavefile\.go$
+      - linters:
+          - gochecknoinits
+          - noctx
+          - unused
+        path: stavefile\.go$
+      - linters:
+          - forbidigo
+          - gochecknoglobals
+          - gochecknoinits
+          - wrapcheck
+          - mnd
+          - godot
+          - varnamelen
+          - nonamedreturns
+          - unparam
+          - revive
+          - nilerr
+          - goconst
+          - gocritic
+          - goprintffuncname
+          - gocognit
+          - intrange
+          - noctx
+          - prealloc
+          - funlen
+          - gosec
+        path: ^cmd/
+      - linters:
+          - varnamelen
+          - wrapcheck
+          - mnd
+          - nonamedreturns
+          - perfsprint
+          - lll
+          - gochecknoglobals
+          - gosec
+          - intrange
+          - unparam
+        path: ^pkg/
+      - linters:
+          - revive
+        path: ^pkg/sweep/types/
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+  fix: false
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax

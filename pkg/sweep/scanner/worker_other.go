@@ -12,3 +12,9 @@ import (
 func getCreateTime(info os.FileInfo) time.Time {
 	return info.ModTime()
 }
+
+// getOwnership returns the owner and group names for a file.
+// On unsupported platforms, returns "unknown" for both.
+func getOwnership(info os.FileInfo) (owner, group string) {
+	return "unknown", "unknown"
+}

@@ -5,21 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/jamesainslie/sweep/cmd/sweep/tui"
+	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
+	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/tuner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 	"github.com/spf13/cobra"
@@ -142,7 +141,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Run scan
 	if noInteractive {
-		return runNonInteractiveScan(opts, jsonOutput)
+		return runNonInteractiveScan(opts, c, jsonOutput)
 	}
 
 	// Interactive TUI mode
@@ -182,7 +181,7 @@ type scanError struct {
 }
 
 // runNonInteractiveScan runs the scan in non-interactive mode.
-func runNonInteractiveScan(opts types.ScanOptions, jsonOutput bool) error {
+func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache, jsonOutput bool) error {
 	// Setup context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,14 +195,28 @@ func runNonInteractiveScan(opts types.ScanOptions, jsonOutput bool) error {
 		cancel()
 	}()
 
+	startTime := time.Now()
+
+	// Try daemon first if available
+	noDaemon := viper.GetBool("no_daemon")
+	if !noDaemon {
+		result, usedDaemon := tryDaemonScan(ctx, opts, jsonOutput)
+		if usedDaemon {
+			result.Elapsed = time.Since(startTime)
+			if jsonOutput {
+				return outputJSON(result)
+			}
+			return outputTable(result)
+		}
+	}
+
+	// Fallback to direct scan
 	if !jsonOutput && !getQuiet() {
 		printInfo("Scanning %s for files >= %s...", opts.Root, types.FormatSize(opts.MinSize))
 	}
 
-	startTime := time.Now()
-
-	// Run the scan
-	result, err := performScan(ctx, opts)
+	// Run the scan using the fast scanner
+	result, err := performScan(ctx, opts, c)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			printInfo("Scan cancelled")
@@ -221,122 +234,50 @@ func runNonInteractiveScan(opts types.ScanOptions, jsonOutput bool) error {
 	return outputTable(result)
 }
 
-// performScan executes the directory scan with the given options.
-func performScan(ctx context.Context, opts types.ScanOptions) (*scanResult, error) {
-	result := &scanResult{
-		Files:  []types.FileInfo{},
-		Errors: []scanError{},
+// tryDaemonScan attempts to use the daemon for scanning.
+// Returns the result and a boolean indicating if the daemon was used.
+func tryDaemonScan(ctx context.Context, opts types.ScanOptions, _ bool) (*scanResult, bool) {
+	// Check if daemon is running
+	pidPath := client.DefaultPIDPath()
+	if !client.IsDaemonRunning(pidPath) {
+		printVerbose("Daemon not running, using direct scan")
+		return nil, false
 	}
 
-	var dirsScanned, filesScanned int64
-	var mu sync.Mutex
-	var files []types.FileInfo
-	var scanErrors []scanError
+	// Try to connect to daemon
+	socketPath := client.DefaultSocketPath()
+	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
+	if err != nil {
+		printVerbose("Failed to connect to daemon: %v", err)
+		return nil, false
+	}
+	defer daemonClient.Close()
 
-	// Create a channel for work items
-	workChan := make(chan string, opts.DirWorkers*100)
-	resultChan := make(chan types.FileInfo, opts.FileWorkers*100)
-	errorChan := make(chan scanError, 100)
-	doneChan := make(chan struct{})
-
-	// Start result collector
-	go func() {
-		for {
-			select {
-			case file, ok := <-resultChan:
-				if !ok {
-					return
-				}
-				mu.Lock()
-				files = append(files, file)
-				mu.Unlock()
-			case err, ok := <-errorChan:
-				if !ok {
-					return
-				}
-				mu.Lock()
-				scanErrors = append(scanErrors, err)
-				mu.Unlock()
-			case <-doneChan:
-				return
-			}
-		}
-	}()
-
-	// Compile exclusion patterns
-	excludePatterns := make([]string, len(opts.Exclude))
-	copy(excludePatterns, opts.Exclude)
-
-	// Walk the directory tree
-	err := filepath.WalkDir(opts.Root, func(path string, d fs.DirEntry, err error) error {
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if err != nil {
-			errorChan <- scanError{Path: path, Error: err.Error()}
-			return nil // Continue walking despite errors
-		}
-
-		// Check exclusions
-		for _, pattern := range excludePatterns {
-			if matched, _ := filepath.Match(pattern, path); matched {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			// Also check if path contains the pattern (for absolute paths like /proc)
-			if strings.HasPrefix(path, pattern) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-
-		if d.IsDir() {
-			atomic.AddInt64(&dirsScanned, 1)
-			return nil
-		}
-
-		atomic.AddInt64(&filesScanned, 1)
-
-		// Get file info
-		info, err := d.Info()
-		if err != nil {
-			errorChan <- scanError{Path: path, Error: err.Error()}
-			return nil
-		}
-
-		// Check size threshold
-		if info.Size() >= opts.MinSize {
-			fileInfo := types.FileInfo{
-				Path:    path,
-				Size:    info.Size(),
-				ModTime: info.ModTime(),
-				Mode:    info.Mode(),
-			}
-			resultChan <- fileInfo
-		}
-
-		return nil
-	})
-
-	// Close channels and wait for collector
-	close(workChan)
-	close(resultChan)
-	close(errorChan)
-	close(doneChan)
-
-	if err != nil && !errors.Is(err, context.Canceled) {
-		return nil, err
+	// Check if index is ready for this path
+	ready, err := daemonClient.IsIndexReady(ctx, opts.Root)
+	if err != nil {
+		printVerbose("Failed to check index status: %v", err)
+		// Trigger indexing in background for next time (uses fresh context)
+		go triggerBackgroundIndexing(opts.Root) //nolint:contextcheck // intentionally uses fresh context for background work
+		return nil, false
 	}
 
-	// Sort files by size (largest first)
+	if !ready {
+		printVerbose("Index not ready for %s, triggering background indexing", opts.Root)
+		// Trigger indexing in background for next time (uses fresh context)
+		go triggerBackgroundIndexing(opts.Root) //nolint:contextcheck // intentionally uses fresh context for background work
+		return nil, false
+	}
+
+	// Index is ready, query the daemon
+	printVerbose("Using daemon index for %s", opts.Root)
+	files, err := daemonClient.GetLargeFiles(ctx, opts.Root, opts.MinSize, opts.Exclude, 0)
+	if err != nil {
+		printVerbose("Failed to query daemon: %v", err)
+		return nil, false
+	}
+
+	// Sort files by size (largest first) - should already be sorted but ensure consistency
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Size > files[j].Size
 	})
@@ -347,11 +288,87 @@ func performScan(ctx context.Context, opts types.ScanOptions) (*scanResult, erro
 		totalSize += f.Size
 	}
 
-	result.Files = files
-	result.DirsScanned = atomic.LoadInt64(&dirsScanned)
-	result.FilesScanned = atomic.LoadInt64(&filesScanned)
-	result.TotalSize = totalSize
-	result.Errors = scanErrors
+	// Get index status for statistics
+	status, err := daemonClient.GetIndexStatus(ctx, opts.Root)
+	if err != nil {
+		printVerbose("Failed to get index status: %v", err)
+	}
+
+	result := &scanResult{
+		Files:        files,
+		DirsScanned:  0,
+		FilesScanned: 0,
+		TotalSize:    totalSize,
+	}
+
+	if status != nil {
+		result.DirsScanned = status.DirsIndexed
+		result.FilesScanned = status.FilesIndexed
+	}
+
+	return result, true
+}
+
+// triggerBackgroundIndexing triggers indexing in the background.
+func triggerBackgroundIndexing(path string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if daemon is running
+	pidPath := client.DefaultPIDPath()
+	if !client.IsDaemonRunning(pidPath) {
+		return
+	}
+
+	socketPath := client.DefaultSocketPath()
+	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
+	if err != nil {
+		return
+	}
+	defer daemonClient.Close()
+
+	// Trigger indexing (don't wait for completion)
+	_ = daemonClient.TriggerIndex(ctx, path, false)
+}
+
+// performScan executes the directory scan with the given options using the fast scanner.
+func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*scanResult, error) {
+	// Create scanner with fastwalk-based implementation
+	s := scanner.New(scanner.Options{
+		Root:        opts.Root,
+		MinSize:     opts.MinSize,
+		Exclude:     opts.Exclude,
+		DirWorkers:  opts.DirWorkers,
+		FileWorkers: opts.FileWorkers,
+		Cache:       c,
+	})
+
+	// Run the scan
+	scanRes, err := s.Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to internal result format
+	result := &scanResult{
+		Files:        scanRes.Files,
+		DirsScanned:  scanRes.DirsScanned,
+		FilesScanned: scanRes.FilesScanned,
+		TotalSize:    scanRes.TotalSize,
+		Errors:       make([]scanError, len(scanRes.Errors)),
+	}
+
+	for i, e := range scanRes.Errors {
+		result.Errors[i] = scanError{
+			Path:  e.Path,
+			Error: e.Error,
+		}
+	}
+
+	// Sort files by size (largest first)
+	sort.Slice(result.Files, func(i, j int) bool {
+		return result.Files[i].Size > result.Files[j].Size
+	})
 
 	return result, nil
 }

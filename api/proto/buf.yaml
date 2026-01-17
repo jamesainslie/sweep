@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - SERVICE_SUFFIX
+    - RPC_RESPONSE_STANDARD_NAME
+    - ENUM_ZERO_VALUE_SUFFIX
+breaking:
+  use:
+    - FILE

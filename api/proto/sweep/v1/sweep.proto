@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package sweep.v1;
+
+option go_package = "github.com/jamesainslie/sweep/pkg/api/sweep/v1;sweepv1";
+
+// SweepDaemon provides disk analysis services
+service SweepDaemon {
+  // Stream large files matching criteria
+  rpc GetLargeFiles(GetLargeFilesRequest) returns (stream FileInfo);
+
+  // Get index status for a path
+  rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatus);
+
+  // Trigger indexing of a path
+  rpc TriggerIndex(TriggerIndexRequest) returns (TriggerIndexResponse);
+
+  // Stream live indexing progress
+  rpc WatchIndexProgress(WatchIndexProgressRequest) returns (stream IndexProgress);
+
+  // Get daemon health/status
+  rpc GetDaemonStatus(GetDaemonStatusRequest) returns (DaemonStatus);
+
+  // Graceful shutdown
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+
+  // Clear cache for a path
+  rpc ClearCache(ClearCacheRequest) returns (ClearCacheResponse);
+}
+
+message GetLargeFilesRequest {
+  string path = 1;
+  int64 min_size = 2;
+  repeated string exclude = 3;
+  int32 limit = 4;
+}
+
+message FileInfo {
+  string path = 1;
+  int64 size = 2;
+  int64 mod_time = 3;
+  int64 create_time = 4;
+  string owner = 5;
+  string group = 6;
+  uint32 mode = 7;
+}
+
+message GetIndexStatusRequest {
+  string path = 1;
+}
+
+message IndexStatus {
+  string path = 1;
+  IndexState state = 2;
+  int64 files_indexed = 3;
+  int64 dirs_indexed = 4;
+  int64 total_size = 5;
+  int64 last_updated = 6;
+  float progress = 7;
+}
+
+enum IndexState {
+  INDEX_STATE_UNKNOWN = 0;
+  INDEX_STATE_NOT_INDEXED = 1;
+  INDEX_STATE_INDEXING = 2;
+  INDEX_STATE_READY = 3;
+  INDEX_STATE_STALE = 4;
+}
+
+message TriggerIndexRequest {
+  string path = 1;
+  bool force = 2;
+}
+
+message TriggerIndexResponse {
+  bool started = 1;
+  string message = 2;
+}
+
+message WatchIndexProgressRequest {
+  string path = 1;
+}
+
+message IndexProgress {
+  string path = 1;
+  IndexState state = 2;
+  int64 dirs_scanned = 3;
+  int64 files_scanned = 4;
+  string current_path = 5;
+  float progress = 6;
+}
+
+message GetDaemonStatusRequest {}
+
+message DaemonStatus {
+  bool running = 1;
+  int64 uptime_seconds = 2;
+  int64 memory_bytes = 3;
+  repeated string watched_paths = 4;
+  int64 cache_size_bytes = 5;
+  int64 total_files_indexed = 6;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {
+  bool success = 1;
+}
+
+message ClearCacheRequest {
+  string path = 1;
+}
+
+message ClearCacheResponse {
+  bool success = 1;
+  int64 entries_cleared = 2;
+}

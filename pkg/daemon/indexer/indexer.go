@@ -1,0 +1,219 @@
+// Package indexer provides filesystem indexing capabilities using fastwalk.
+package indexer
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/charlievieth/fastwalk"
+	"github.com/jamesainslie/sweep/pkg/daemon/store"
+)
+
+// Progress reports indexing progress.
+type Progress struct {
+	Path         string
+	DirsScanned  int64
+	FilesScanned int64
+	CurrentPath  string
+}
+
+// Result contains the final indexing results.
+type Result struct {
+	Path         string
+	DirsIndexed  int64
+	FilesIndexed int64
+	TotalSize    int64
+	Duration     time.Duration
+}
+
+// ProgressFunc is called with progress updates.
+type ProgressFunc func(Progress)
+
+// Indexer indexes filesystem paths into the store.
+type Indexer struct {
+	store *store.Store
+}
+
+// New creates a new indexer.
+func New(s *store.Store) *Indexer {
+	return &Indexer{store: s}
+}
+
+// indexState holds the state during indexing.
+type indexState struct {
+	dirsScanned  atomic.Int64
+	filesScanned atomic.Int64
+	totalSize    atomic.Int64
+	currentPath  atomic.Value
+	entriesMu    sync.Mutex
+	entries      []*store.Entry
+}
+
+// Index indexes a path and stores results.
+func (idx *Indexer) Index(ctx context.Context, root string, onProgress ProgressFunc) (*Result, error) {
+	startTime := time.Now()
+
+	// Resolve to absolute path
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+
+	state := &indexState{}
+	state.currentPath.Store("")
+
+	// Start progress reporting
+	done := idx.startProgressReporter(ctx, absRoot, state, onProgress)
+	defer func() {
+		close(done)
+		// Send final progress
+		idx.sendProgress(absRoot, state, onProgress)
+	}()
+
+	// Walk the filesystem
+	err = idx.walkFilesystem(ctx, absRoot, state)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return nil, err
+	}
+
+	// Write remaining entries
+	if err := idx.flushRemainingEntries(state); err != nil {
+		return nil, err
+	}
+
+	return &Result{
+		Path:         absRoot,
+		DirsIndexed:  state.dirsScanned.Load(),
+		FilesIndexed: state.filesScanned.Load(),
+		TotalSize:    state.totalSize.Load(),
+		Duration:     time.Since(startTime),
+	}, nil
+}
+
+// sendProgress sends a progress update if callback is provided.
+func (idx *Indexer) sendProgress(absRoot string, state *indexState, onProgress ProgressFunc) {
+	if onProgress != nil {
+		cp, _ := state.currentPath.Load().(string)
+		onProgress(Progress{
+			Path:         absRoot,
+			DirsScanned:  state.dirsScanned.Load(),
+			FilesScanned: state.filesScanned.Load(),
+			CurrentPath:  cp,
+		})
+	}
+}
+
+// startProgressReporter starts the progress reporting goroutine.
+func (idx *Indexer) startProgressReporter(ctx context.Context, absRoot string, state *indexState, onProgress ProgressFunc) chan struct{} {
+	done := make(chan struct{})
+
+	// Send initial progress
+	idx.sendProgress(absRoot, state, onProgress)
+
+	if onProgress != nil {
+		go func() {
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					idx.sendProgress(absRoot, state, onProgress)
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	return done
+}
+
+// walkFilesystem performs the filesystem walk.
+func (idx *Indexer) walkFilesystem(ctx context.Context, absRoot string, state *indexState) error {
+	conf := fastwalk.Config{
+		Follow: false,
+	}
+
+	return fastwalk.Walk(&conf, absRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Skip entries with errors - intentionally continue walking
+		if walkErr != nil {
+			return nil //nolint:nilerr // Intentionally skip errors and continue walking
+		}
+
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return nil //nolint:nilerr // Intentionally skip entries we can't stat
+		}
+
+		return idx.processEntry(path, info, d.IsDir(), state)
+	})
+}
+
+// processEntry processes a single filesystem entry.
+func (idx *Indexer) processEntry(path string, info fs.FileInfo, isDir bool, state *indexState) error {
+	entry := &store.Entry{
+		Path:    path,
+		Size:    info.Size(),
+		ModTime: info.ModTime().Unix(),
+		IsDir:   isDir,
+	}
+
+	state.entriesMu.Lock()
+	state.entries = append(state.entries, entry)
+	state.entriesMu.Unlock()
+
+	if isDir {
+		state.dirsScanned.Add(1)
+		state.currentPath.Store(path)
+	} else {
+		state.filesScanned.Add(1)
+		state.totalSize.Add(info.Size())
+	}
+
+	// Batch write every 1000 entries
+	return idx.flushBatchIfNeeded(state)
+}
+
+// flushBatchIfNeeded writes entries to store if batch size is reached.
+func (idx *Indexer) flushBatchIfNeeded(state *indexState) error {
+	state.entriesMu.Lock()
+	if len(state.entries) >= 1000 {
+		batch := state.entries
+		state.entries = nil
+		state.entriesMu.Unlock()
+		return idx.store.PutBatch(batch)
+	}
+	state.entriesMu.Unlock()
+	return nil
+}
+
+// flushRemainingEntries writes any remaining entries to the store.
+func (idx *Indexer) flushRemainingEntries(state *indexState) error {
+	state.entriesMu.Lock()
+	remaining := state.entries
+	state.entriesMu.Unlock()
+
+	if len(remaining) > 0 {
+		return idx.store.PutBatch(remaining)
+	}
+	return nil
+}
+
+// IsIndexed checks if a path has been indexed.
+func (idx *Indexer) IsIndexed(root string) bool {
+	return idx.store.HasIndex(root)
+}

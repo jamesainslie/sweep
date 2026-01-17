@@ -6,9 +6,11 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
+	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
 
@@ -58,12 +60,22 @@ func (s *Scanner) processDirectory(ctx context.Context, dir string, dirQueue cha
 		s.reportProgress()
 	}
 
+	// Get directory info for cache
+	dirInfo, statErr := os.Stat(dir)
+	if statErr != nil {
+		s.addError(dir, statErr)
+		return
+	}
+
 	// Read directory entries.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		s.addError(dir, err)
 		return
 	}
+
+	// Collect child names for cache entry
+	var childNames []string
 
 	for _, entry := range entries {
 		// Check for cancellation.
@@ -80,6 +92,9 @@ func (s *Scanner) processDirectory(ctx context.Context, dir string, dirQueue cha
 		if s.isExcluded(fullPath) {
 			continue
 		}
+
+		// Add to children list for cache
+		childNames = append(childNames, name)
 
 		// Use DirEntry.Type() which doesn't require a stat call.
 		if entry.IsDir() {
@@ -104,6 +119,14 @@ func (s *Scanner) processDirectory(ctx context.Context, dir string, dirQueue cha
 		}
 		// Skip symlinks and special files.
 	}
+
+	// Add directory to cache entries
+	s.addCacheEntry(dir, &cache.CachedEntry{
+		IsDir:    true,
+		Size:     0,
+		Mtime:    dirInfo.ModTime().UnixNano(),
+		Children: childNames,
+	})
 }
 
 // fileWorker processes files from the file queue.
@@ -152,6 +175,14 @@ func (s *Scanner) processFile(ctx context.Context, path string, results chan<- t
 	s.filesScanned.Add(1)
 	s.bytesScanned.Add(size)
 
+	// Add file to cache entries (regardless of size filtering)
+	s.addCacheEntry(path, &cache.CachedEntry{
+		IsDir:    false,
+		Size:     size,
+		Mtime:    info.ModTime().UnixNano(),
+		Children: nil,
+	})
+
 	// Early filtering - skip small files before building FileInfo.
 	if size < s.opts.MinSize {
 		return
@@ -179,6 +210,27 @@ func (s *Scanner) processFile(ctx context.Context, path string, results chan<- t
 	case results <- fi:
 	case <-ctx.Done():
 	}
+}
+
+// addCacheEntry adds an entry to the cache entries map thread-safely.
+// The path is converted to a relative path from the root before storing.
+func (s *Scanner) addCacheEntry(fullPath string, entry *cache.CachedEntry) {
+	if s.cacheEntries == nil {
+		return // Cache not enabled for this scan
+	}
+
+	// Get the root path from opts
+	root, _ := filepath.Abs(s.opts.Root)
+
+	// Calculate relative path
+	relPath := ""
+	if fullPath != root {
+		relPath = strings.TrimPrefix(fullPath, root+string(filepath.Separator))
+	}
+
+	s.cacheEntriesMu.Lock()
+	s.cacheEntries[relPath] = entry
+	s.cacheEntriesMu.Unlock()
 }
 
 // isExcluded checks if a path matches any exclusion pattern.

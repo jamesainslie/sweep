@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
 
@@ -45,6 +47,10 @@ type Scanner struct {
 	// results collects files matching the criteria.
 	results   []types.FileInfo
 	resultsMu sync.Mutex
+
+	// cacheEntries collects entries for cache updates during scan.
+	cacheEntries   map[string]*cache.CachedEntry
+	cacheEntriesMu sync.Mutex
 }
 
 // New creates a new Scanner with the given options.
@@ -83,6 +89,43 @@ func (s *Scanner) Scan(ctx context.Context) (*types.ScanResult, error) {
 		return nil, os.ErrInvalid
 	}
 
+	// Phase 1: Check cache for valid entries
+	var dirsToScan []string
+	if s.opts.Cache != nil {
+		validFiles, staleDirs, cacheErr := s.opts.Cache.ValidateAndGetStale(root)
+		if cacheErr == nil && len(staleDirs) == 0 {
+			// Everything cached and valid - filter by MinSize and return
+			for _, f := range validFiles {
+				if f.Size >= s.opts.MinSize && !s.isExcluded(f.Path) {
+					s.results = append(s.results, f)
+				}
+			}
+			s.filesScanned.Store(int64(len(validFiles)))
+			return &types.ScanResult{
+				Files:        s.results,
+				DirsScanned:  0,
+				FilesScanned: int64(len(validFiles)),
+				Elapsed:      time.Since(startTime),
+				Errors:       s.errors,
+			}, nil
+		}
+		// If we have stale dirs, we need to scan them
+		if len(staleDirs) > 0 {
+			dirsToScan = staleDirs
+			// Add valid files that pass the filter and are NOT under a stale directory
+			for _, f := range validFiles {
+				if f.Size >= s.opts.MinSize && !s.isExcluded(f.Path) && !isUnderStaleDirs(f.Path, staleDirs) {
+					s.results = append(s.results, f)
+					s.largeFiles.Add(1)
+				}
+			}
+		}
+	}
+
+	// Initialize cache entries map for collecting during scan
+	s.cacheEntries = make(map[string]*cache.CachedEntry)
+
+	// Phase 2: Scan directories (either all from root, or just stale dirs)
 	// Create bounded channels.
 	dirQueue := make(chan string, dirQueueSize)
 	fileQueue := make(chan string, fileQueueSize)
@@ -127,10 +170,18 @@ func (s *Scanner) Scan(ctx context.Context) (*types.ScanResult, error) {
 		}
 	}()
 
-	// Seed the directory queue with the root.
-	// Increment inFlight BEFORE sending to queue.
-	inFlight.Add(1)
-	dirQueue <- root
+	// Seed the directory queue.
+	if len(dirsToScan) > 0 {
+		// Scan only stale directories
+		for _, dir := range dirsToScan {
+			inFlight.Add(1)
+			dirQueue <- dir
+		}
+	} else {
+		// Full scan from root
+		inFlight.Add(1)
+		dirQueue <- root
+	}
 
 	// Wait for directory context to be cancelled (signals completion).
 	<-dirCtx.Done()
@@ -150,6 +201,14 @@ func (s *Scanner) Scan(ctx context.Context) (*types.ScanResult, error) {
 	// Wait for result collector to finish.
 	collectWG.Wait()
 
+	// Phase 3: Update cache with collected entries
+	if s.opts.Cache != nil && len(s.cacheEntries) > 0 {
+		if updateErr := s.opts.Cache.Update(root, s.cacheEntries); updateErr != nil {
+			// Log error but don't fail the scan
+			s.addError("cache update", updateErr)
+		}
+	}
+
 	// Build final result.
 	result := &types.ScanResult{
 		Files:        s.results,
@@ -161,6 +220,16 @@ func (s *Scanner) Scan(ctx context.Context) (*types.ScanResult, error) {
 	}
 
 	return result, nil
+}
+
+// isUnderStaleDirs checks if a path is under any of the stale directories.
+func isUnderStaleDirs(path string, staleDirs []string) bool {
+	for _, staleDir := range staleDirs {
+		if strings.HasPrefix(path, staleDir+string(filepath.Separator)) || path == staleDir {
+			return true
+		}
+	}
+	return false
 }
 
 // addError adds an error to the error list thread-safely.

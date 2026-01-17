@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -34,6 +35,7 @@ type Options struct {
 	DirWorkers  int
 	FileWorkers int
 	DryRun      bool
+	Cache       *cache.Cache
 }
 
 // Model is the main Bubble Tea model for the sweep TUI.
@@ -433,6 +435,7 @@ func (m Model) startScan() tea.Cmd {
 			DirWorkers:  m.options.DirWorkers,
 			FileWorkers: m.options.FileWorkers,
 			OnProgress:  nil, // Will be set separately
+			Cache:       m.options.Cache,
 		}
 
 		s := scanner.New(opts)

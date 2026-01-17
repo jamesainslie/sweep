@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/jamesainslie/sweep/cmd/sweep/tui"
+	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/tuner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
@@ -101,6 +104,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Get exclusion patterns
 	exclude := viper.GetStringSlice("exclude")
 
+	// Initialize cache if not disabled
+	var c *cache.Cache
+	noCache := viper.GetBool("no_cache")
+	if !noCache {
+		cachePath := filepath.Join(xdg.CacheHome, "sweep", "metadata")
+		var err error
+		c, err = cache.Open(cachePath)
+		if err != nil {
+			// Log warning, continue without cache
+			printVerbose("Warning: cache unavailable: %v", err)
+		} else {
+			defer c.Close()
+			printVerbose("Using cache at %s", cachePath)
+		}
+	} else {
+		printVerbose("Cache disabled via --no-cache flag")
+	}
+
 	// Build scan options
 	opts := types.ScanOptions{
 		Root:        absPath,
@@ -125,11 +146,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Interactive TUI mode
-	return runInteractiveTUI(opts)
+	return runInteractiveTUI(opts, c)
 }
 
 // runInteractiveTUI runs the TUI application.
-func runInteractiveTUI(opts types.ScanOptions) error {
+func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 	dryRun := viper.GetBool("dry_run")
 
 	tuiOpts := tui.Options{
@@ -139,6 +160,7 @@ func runInteractiveTUI(opts types.ScanOptions) error {
 		DirWorkers:  opts.DirWorkers,
 		FileWorkers: opts.FileWorkers,
 		DryRun:      dryRun,
+		Cache:       c,
 	}
 
 	return tui.Run(tuiOpts)
@@ -183,7 +205,7 @@ func runNonInteractiveScan(opts types.ScanOptions, jsonOutput bool) error {
 	// Run the scan
 	result, err := performScan(ctx, opts)
 	if err != nil {
-		if ctx.Err() == context.Canceled {
+		if errors.Is(ctx.Err(), context.Canceled) {
 			printInfo("Scan cancelled")
 			return nil
 		}
@@ -310,7 +332,7 @@ func performScan(ctx context.Context, opts types.ScanOptions) (*scanResult, erro
 	close(errorChan)
 	close(doneChan)
 
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		return nil, err
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -204,7 +205,7 @@ func runNonInteractiveScan(opts types.ScanOptions, jsonOutput bool) error {
 	// Run the scan
 	result, err := performScan(ctx, opts)
 	if err != nil {
-		if ctx.Err() == context.Canceled {
+		if errors.Is(ctx.Err(), context.Canceled) {
 			printInfo("Scan cancelled")
 			return nil
 		}
@@ -331,7 +332,7 @@ func performScan(ctx context.Context, opts types.ScanOptions) (*scanResult, erro
 	close(errorChan)
 	close(doneChan)
 
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		return nil, err
 	}
 

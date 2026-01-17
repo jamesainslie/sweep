@@ -39,7 +39,7 @@ func (s *Store) Get(root, relPath string) (*CachedEntry, error) {
 
 	err := s.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ErrNotFound
 		}
 		if err != nil {

@@ -313,15 +313,6 @@ func (m ResultModel) renderFileList(width int) string {
 		isCursor := i == m.cursor
 		isSelected := m.selected[i]
 
-		// Build the row content
-		var checkbox string
-		if isSelected {
-			checkbox = checkboxChecked
-		} else {
-			checkbox = checkboxUnchecked
-		}
-
-		size := sizeStyle.Render(types.FormatSize(file.Size))
 		filename := filepath.Base(file.Path)
 
 		// Calculate available width for filename
@@ -334,14 +325,25 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Build the row - checkbox centered in 3-char column
-		row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
-
-		// Apply styling based on cursor position
-		// Use Width() on style to force full-width background
+		// For highlighted row, use plain text so background spans full width
+		// For normal rows, use styled checkbox and size
 		if isCursor {
+			checkbox := "✓"
+			if !isSelected {
+				checkbox = "○"
+			}
+			size := padLeft(types.FormatSize(file.Size), 10)
+			row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
+			var checkbox string
+			if isSelected {
+				checkbox = checkboxChecked
+			} else {
+				checkbox = checkboxUnchecked
+			}
+			size := sizeStyle.Render(types.FormatSize(file.Size))
+			row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

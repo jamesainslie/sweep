@@ -95,10 +95,18 @@ func (idx *Indexer) Index(ctx context.Context, root string, onProgress ProgressF
 		return nil, err
 	}
 
+	// Save metadata for fast status lookups
+	files := state.filesScanned.Load()
+	dirs := state.dirsScanned.Load()
+	_ = idx.store.SetIndexMeta(absRoot, &store.IndexMeta{
+		Files: files,
+		Dirs:  dirs,
+	})
+
 	return &Result{
 		Path:         absRoot,
-		DirsIndexed:  state.dirsScanned.Load(),
-		FilesIndexed: state.filesScanned.Load(),
+		DirsIndexed:  dirs,
+		FilesIndexed: files,
 		TotalSize:    state.totalSize.Load(),
 		Duration:     time.Since(startTime),
 	}, nil

@@ -344,6 +344,49 @@ func (s *Store) HasIndex(root string) bool {
 	return err == nil
 }
 
+// IndexMeta holds metadata about an indexed path.
+type IndexMeta struct {
+	Files int64 `json:"files"`
+	Dirs  int64 `json:"dirs"`
+}
+
+// SetIndexMeta stores metadata for an indexed path.
+func (s *Store) SetIndexMeta(root string, meta *IndexMeta) error {
+	key := []byte(prefixMeta + root)
+	val := make([]byte, 16)
+	binary.BigEndian.PutUint64(val[0:8], uint64(meta.Files))
+	binary.BigEndian.PutUint64(val[8:16], uint64(meta.Dirs))
+
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, val)
+	})
+}
+
+// GetIndexMeta retrieves metadata for an indexed path.
+// Returns nil if no metadata exists.
+func (s *Store) GetIndexMeta(root string) *IndexMeta {
+	key := []byte(prefixMeta + root)
+	var meta *IndexMeta
+
+	_ = s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if len(val) >= 16 {
+				meta = &IndexMeta{
+					Files: int64(binary.BigEndian.Uint64(val[0:8])),
+					Dirs:  int64(binary.BigEndian.Uint64(val[8:16])),
+				}
+			}
+			return nil
+		})
+	})
+
+	return meta
+}
+
 // IsPathUnderRoot checks if path is under root.
 func IsPathUnderRoot(path, root string) bool {
 	cleanRoot := filepath.Clean(root)

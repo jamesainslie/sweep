@@ -115,9 +115,12 @@ func (s *Service) GetIndexStatus(_ context.Context, req *sweepv1.GetIndexStatusR
 		idxStatus.DirsIndexed = state.dirs
 	case s.store.HasIndex(reqPath):
 		idxStatus.State = sweepv1.IndexState_INDEX_STATE_READY
-		files, dirs, _ := s.store.CountEntries(reqPath)
-		idxStatus.FilesIndexed = files
-		idxStatus.DirsIndexed = dirs
+		// Use cached metadata for fast lookups
+		if meta := s.store.GetIndexMeta(reqPath); meta != nil {
+			idxStatus.FilesIndexed = meta.Files
+			idxStatus.DirsIndexed = meta.Dirs
+		}
+		// If no metadata, counts will be 0 (old index without metadata)
 	default:
 		idxStatus.State = sweepv1.IndexState_INDEX_STATE_NOT_INDEXED
 	}

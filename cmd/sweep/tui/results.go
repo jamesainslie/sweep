@@ -278,9 +278,9 @@ func (m ResultModel) renderHelpBar(width int) string {
 
 // Styles for file list rendering.
 var (
-	// Row highlight style - warm orange background spanning full width
+	// Row highlight style - light pink background spanning full width
 	rowHighlightStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("#663300")).
+				Background(lipgloss.Color("#4A2040")).
 				Foreground(lipgloss.Color("#FFFFFF")).
 				Bold(true)
 

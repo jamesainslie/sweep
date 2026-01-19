@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -515,4 +516,377 @@ func (m ResultModel) HasSelection() bool {
 func (m *ResultModel) SetDimensions(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+// AddFile inserts a file in sorted position (by size descending).
+// This method is used for streaming results as files are found.
+func (m *ResultModel) AddFile(file types.FileInfo) {
+	// Find insertion point using binary search (largest first).
+	idx := sort.Search(len(m.files), func(i int) bool {
+		return m.files[i].Size <= file.Size
+	})
+
+	// Insert at the found position.
+	m.files = append(m.files, types.FileInfo{})
+	copy(m.files[idx+1:], m.files[idx:])
+	m.files[idx] = file
+
+	// Update selected indices for files that shifted.
+	newSelected := make(map[int]bool)
+	for i, selected := range m.selected {
+		if selected {
+			if i >= idx {
+				newSelected[i+1] = true
+			} else {
+				newSelected[i] = true
+			}
+		}
+	}
+	m.selected = newSelected
+
+	// Keep cursor visible after insertion.
+	if m.cursor >= idx {
+		m.cursor++
+	}
+}
+
+// UpdateFile updates a file's size and mod time, re-sorting if needed.
+// If the file is not found, it's added. If the new size is below min threshold,
+// the file is removed.
+func (m *ResultModel) UpdateFile(path string, newSize int64, modTime time.Time) {
+	// Find the file by path.
+	idx := -1
+	for i, f := range m.files {
+		if f.Path == path {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		// File not found, add it.
+		m.AddFile(types.FileInfo{
+			Path:    path,
+			Size:    newSize,
+			ModTime: modTime,
+		})
+		return
+	}
+
+	// Check if size changed significantly enough to require re-sorting.
+	oldSize := m.files[idx].Size
+	m.files[idx].Size = newSize
+	m.files[idx].ModTime = modTime
+
+	if oldSize == newSize {
+		return // No size change, no need to re-sort.
+	}
+
+	// Re-sort by removing and re-adding.
+	// First, remove from current position.
+	wasSelected := m.selected[idx]
+	m.removeFileAtIndex(idx)
+
+	// Re-add with new size.
+	m.AddFile(types.FileInfo{
+		Path:    path,
+		Size:    newSize,
+		ModTime: modTime,
+	})
+
+	// Restore selection if it was selected.
+	if wasSelected {
+		// Find new index.
+		for i, f := range m.files {
+			if f.Path == path {
+				m.selected[i] = true
+				break
+			}
+		}
+	}
+}
+
+// RemoveFile removes a file from the results by path.
+func (m *ResultModel) RemoveFile(path string) {
+	// Find the file by path.
+	idx := -1
+	for i, f := range m.files {
+		if f.Path == path {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		return // File not found, nothing to do.
+	}
+
+	m.removeFileAtIndex(idx)
+}
+
+// removeFileAtIndex removes a file at the specified index.
+func (m *ResultModel) removeFileAtIndex(idx int) {
+	if idx < 0 || idx >= len(m.files) {
+		return
+	}
+
+	// Remove from files slice.
+	m.files = append(m.files[:idx], m.files[idx+1:]...)
+
+	// Update selected indices for files that shifted.
+	newSelected := make(map[int]bool)
+	for i, selected := range m.selected {
+		if selected {
+			if i < idx {
+				newSelected[i] = true
+			} else if i > idx {
+				newSelected[i-1] = true
+			}
+			// If i == idx, it's being removed so don't add to newSelected.
+		}
+	}
+	m.selected = newSelected
+
+	// Adjust cursor if needed.
+	if m.cursor > idx {
+		m.cursor--
+	} else if m.cursor == idx && m.cursor >= len(m.files) && len(m.files) > 0 {
+		m.cursor = len(m.files) - 1
+	}
+
+	// Ensure offset is still valid.
+	m.ensureVisible()
+}
+
+// ViewWithProgress renders the results with scan progress information in the footer.
+func (m ResultModel) ViewWithProgress(progress ScanProgress) string {
+	return m.ViewWithProgressAndNotifications(progress, nil, false)
+}
+
+// ViewWithProgressAndNotifications renders the results with progress, notifications, and live status.
+func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, notifications []Notification, liveWatching bool) string {
+	if len(m.files) == 0 && progress.Scanning {
+		return m.renderScanning(progress)
+	}
+
+	if len(m.files) == 0 {
+		return m.renderEmpty()
+	}
+
+	var b strings.Builder
+
+	// Calculate dimensions.
+	contentWidth := m.width - 4
+	if contentWidth < 60 {
+		contentWidth = 60
+	}
+
+	// Add top margin for visual spacing.
+	b.WriteString("\n")
+
+	// Header with live indicator.
+	b.WriteString(m.renderHeaderWithLive(contentWidth, liveWatching))
+	b.WriteString("\n")
+
+	// Metrics line (if available or scanning).
+	metricsLine := m.renderMetricsWithProgress(contentWidth, progress)
+	if metricsLine != "" {
+		b.WriteString(metricsLine)
+		b.WriteString("\n")
+	}
+
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+
+	// Help bar.
+	b.WriteString(m.renderHelpBar(contentWidth))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+
+	// File list.
+	b.WriteString(m.renderFileList(contentWidth))
+
+	// Calculate padding needed to push footer to bottom.
+	contentSoFar := strings.Count(b.String(), "\n")
+	availableHeight := m.height - 4 // Account for outer box borders and padding.
+	notificationLines := len(notifications)
+	if notificationLines > 3 {
+		notificationLines = 3 // Max 3 notifications shown
+	}
+	footerLines := 2 + notificationLines // divider + footer + notifications
+	neededPadding := availableHeight - contentSoFar - footerLines
+	if neededPadding > 0 {
+		b.WriteString(strings.Repeat("\n", neededPadding))
+	}
+
+	// Notifications above footer
+	if len(notifications) > 0 {
+		b.WriteString(m.renderNotifications(contentWidth, notifications))
+	}
+
+	// Footer with progress.
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+	b.WriteString(m.renderFooterWithProgress(contentWidth, progress))
+
+	content := b.String()
+	return outerBoxStyle.Width(m.width - 2).Height(m.height - 2).Render(content)
+}
+
+// renderHeaderWithLive renders the header with an optional live indicator.
+func (m ResultModel) renderHeaderWithLive(width int, liveWatching bool) string {
+	title := fmt.Sprintf("  sweep - %d files over threshold (Total: %s)",
+		len(m.files), types.FormatSize(m.TotalSize()))
+
+	if liveWatching {
+		liveIndicator := notificationAddedStyle.Render("● LIVE")
+		title = title + "  " + liveIndicator
+	}
+
+	_ = width // Suppress unused warning
+	return titleStyle.Render(title)
+}
+
+// renderNotifications renders the notification area.
+func (m ResultModel) renderNotifications(width int, notifications []Notification) string {
+	var b strings.Builder
+
+	// Show at most 3 notifications (newest first)
+	maxNotifications := 3
+	start := 0
+	if len(notifications) > maxNotifications {
+		start = len(notifications) - maxNotifications
+	}
+
+	for i := len(notifications) - 1; i >= start; i-- {
+		n := notifications[i]
+		var styled string
+		switch n.Type {
+		case NotificationAdded:
+			styled = notificationAddedStyle.Render(n.Message)
+		case NotificationRemoved:
+			styled = notificationRemovedStyle.Render(n.Message)
+		case NotificationModified:
+			styled = notificationModifiedStyle.Render(n.Message)
+		default:
+			styled = n.Message
+		}
+
+		// Right-align notifications
+		padding := width - len(n.Message) - 4
+		if padding < 0 {
+			padding = 0
+		}
+		b.WriteString(strings.Repeat(" ", padding) + styled + "\n")
+	}
+
+	return b.String()
+}
+
+// renderScanning renders the initial scanning state before any files are found.
+func (m ResultModel) renderScanning(progress ScanProgress) string {
+	contentWidth := m.width - 4
+	if contentWidth < 60 {
+		contentWidth = 60
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(titleStyle.Render("  sweep - scanning..."))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n\n")
+
+	// Progress stats.
+	elapsed := time.Since(progress.StartTime).Round(time.Millisecond)
+	stats := fmt.Sprintf("  Dirs: %s  Files: %s  Time: %v",
+		humanize.Comma(progress.DirsScanned),
+		humanize.Comma(progress.FilesScanned),
+		elapsed)
+	b.WriteString(mutedTextStyle.Render(stats))
+	b.WriteString("\n\n")
+
+	b.WriteString(center(mutedTextStyle.Render("Searching for large files..."), contentWidth))
+	b.WriteString("\n")
+
+	return outerBoxStyle.Width(m.width - 2).Height(m.height - 2).Render(b.String())
+}
+
+// renderMetricsWithProgress renders metrics including real-time progress.
+func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress) string {
+	var parts []string
+
+	// Dirs and files scanned (prefer progress over final metrics during scanning).
+	dirsScanned := m.metrics.DirsScanned
+	filesScanned := m.metrics.FilesScanned
+	if progress.Scanning {
+		dirsScanned = progress.DirsScanned
+		filesScanned = progress.FilesScanned
+	}
+
+	if dirsScanned > 0 || filesScanned > 0 {
+		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
+			humanize.Comma(dirsScanned),
+			humanize.Comma(filesScanned)))
+	}
+
+	// Cache stats.
+	cacheHits := m.metrics.CacheHits
+	cacheMisses := m.metrics.CacheMisses
+	if progress.Scanning {
+		cacheHits = progress.CacheHits
+		cacheMisses = progress.CacheMisses
+	}
+
+	total := cacheHits + cacheMisses
+	if total > 0 {
+		hitRate := float64(cacheHits) / float64(total) * 100
+		parts = append(parts, fmt.Sprintf("Cache: %s hits, %s misses (%.0f%%)",
+			humanize.Comma(cacheHits),
+			humanize.Comma(cacheMisses),
+			hitRate))
+	}
+
+	// Elapsed time.
+	var elapsed time.Duration
+	if progress.Scanning {
+		elapsed = time.Since(progress.StartTime)
+	} else {
+		elapsed = m.metrics.Elapsed
+	}
+	if elapsed > 0 {
+		parts = append(parts, fmt.Sprintf("Time: %v", elapsed.Round(time.Millisecond)))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	_ = width // Suppress unused warning, parameter kept for consistency.
+	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
+}
+
+// renderFooterWithProgress renders the footer with selection summary and scan status.
+func (m ResultModel) renderFooterWithProgress(width int, progress ScanProgress) string {
+	selectedCount := len(m.selected)
+	selectedSize := m.SelectedSize()
+
+	var left string
+	if progress.Scanning {
+		left = fmt.Sprintf("  Scanning... Found: %d files (%s) | Selected: %d (%s)",
+			len(m.files), types.FormatSize(m.TotalSize()),
+			selectedCount, types.FormatSize(selectedSize))
+	} else {
+		left = fmt.Sprintf("  Selected: %d files (%s)", selectedCount, types.FormatSize(selectedSize))
+	}
+
+	right := mutedTextStyle.Render("[" + string(rune(0x2191)) + string(rune(0x2193)) + "] Navigate")
+
+	spacing := width - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if spacing < 1 {
+		spacing = 1
+	}
+
+	return left + strings.Repeat(" ", spacing) + right
 }

@@ -34,6 +34,11 @@ type Options struct {
 	// It must be safe to call from multiple goroutines.
 	OnProgress func(types.ScanProgress)
 
+	// OnFile is called for each file that matches the MinSize threshold.
+	// It allows streaming results as files are found rather than waiting
+	// for the entire scan to complete. Must be safe for concurrent calls.
+	OnFile func(types.FileInfo)
+
 	// Cache is an optional cache for speeding up repeat scans.
 	// If nil, caching is disabled.
 	Cache *cache.Cache

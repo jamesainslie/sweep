@@ -219,3 +219,21 @@ func center(s string, width int) string {
 	rightPad := width - len(s) - leftPad
 	return repeatChar(' ', leftPad) + s + repeatChar(' ', rightPad)
 }
+
+// Notification styles for live file events.
+var (
+	// notificationAddedStyle for file added notifications.
+	notificationAddedStyle = lipgloss.NewStyle().
+				Foreground(successColor).
+				Padding(0, 1)
+
+	// notificationRemovedStyle for file removed notifications.
+	notificationRemovedStyle = lipgloss.NewStyle().
+					Foreground(dangerColor).
+					Padding(0, 1)
+
+	// notificationModifiedStyle for file modified notifications.
+	notificationModifiedStyle = lipgloss.NewStyle().
+					Foreground(warningColor).
+					Padding(0, 1)
+)

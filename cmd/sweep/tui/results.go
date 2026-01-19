@@ -216,10 +216,16 @@ func (m ResultModel) renderEmpty() string {
 
 // renderHeader renders the header.
 func (m ResultModel) renderHeader(_ int) string {
-	title := fmt.Sprintf("  sweep - %d files over threshold (Total: %s)",
-		len(m.files), types.FormatSize(m.TotalSize()))
+	// Icon and app name
+	icon := "🧹"
+	appName := titleStyle.Bold(true).Render("SWEEP")
 
-	return titleStyle.Render(title)
+	// Stats in muted style
+	fileCount := fmt.Sprintf("%d files", len(m.files))
+	totalSize := types.FormatSize(m.TotalSize())
+	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
+
+	return fmt.Sprintf(" %s %s%s", icon, appName, stats)
 }
 
 // renderMetrics renders the scan metrics line.
@@ -742,22 +748,24 @@ func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, not
 }
 
 // renderHeaderWithLive renders the header with an optional live indicator.
-func (m ResultModel) renderHeaderWithLive(width int, liveWatching bool) string {
-	title := fmt.Sprintf("█ sweep - %d files over threshold (Total: %s)",
-		len(m.files), types.FormatSize(m.TotalSize()))
+func (m ResultModel) renderHeaderWithLive(_ int, liveWatching bool) string {
+	// Icon and app name
+	icon := "🧹"
+	appName := titleStyle.Bold(true).Render("SWEEP")
+
+	// Stats in muted style
+	fileCount := fmt.Sprintf("%d files", len(m.files))
+	totalSize := types.FormatSize(m.TotalSize())
+	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
+
+	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
 
 	if liveWatching {
-		liveIndicator := successTextStyle.Render("● LIVE")
-		title = title + "  " + liveIndicator
+		liveIndicator := successTextStyle.Render("  ● LIVE")
+		header = header + liveIndicator
 	}
 
-	// Pad to full width for visibility
-	titleLen := lipgloss.Width(title)
-	if titleLen < width {
-		title = title + strings.Repeat(" ", width-titleLen)
-	}
-
-	return titleStyle.Render(title)
+	return header
 }
 
 // renderNotifications renders the notification area.

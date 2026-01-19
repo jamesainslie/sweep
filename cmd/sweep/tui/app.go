@@ -2,9 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,8 +21,7 @@ import (
 type AppState int
 
 const (
-	StateScanning AppState = iota
-	StateResults
+	StateResults AppState = iota
 	StateConfirm
 	StateDeleting
 	StateComplete
@@ -40,10 +39,35 @@ type Options struct {
 	Cache       *cache.Cache
 }
 
+// ScanProgress tracks the progress of a scan for the TUI.
+type ScanProgress struct {
+	DirsScanned  int64
+	FilesScanned int64
+	CacheHits    int64
+	CacheMisses  int64
+	Scanning     bool
+	StartTime    time.Time
+}
+
+// NotificationType represents the type of notification.
+type NotificationType int
+
+const (
+	NotificationAdded NotificationType = iota
+	NotificationRemoved
+	NotificationModified
+)
+
+// Notification represents a temporary notification message.
+type Notification struct {
+	Type    NotificationType
+	Message string
+	Expires time.Time
+}
+
 // Model is the main Bubble Tea model for the sweep TUI.
 type Model struct {
 	state       AppState
-	scanModel   ScanModel
 	resultModel ResultModel
 	options     Options
 
@@ -51,9 +75,16 @@ type Model struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	scanDone     bool
-	scanErr      error
-	scanFiles    []types.FileInfo
+	scanProgress ScanProgress
+	fileChan     chan types.FileInfo
 	progressChan chan types.ScanProgress
+
+	// Live file events state
+	liveEventChan <-chan client.FileEvent
+	liveWatching  bool
+
+	// Notifications for live events
+	notifications []Notification
 
 	// Confirmation dialog state
 	confirmFocused int // 0 = cancel, 1 = delete
@@ -79,15 +110,20 @@ func NewModel(opts Options) Model {
 	s.Style = lipgloss.NewStyle().Foreground(dangerColor)
 
 	return Model{
-		state:          StateScanning,
-		scanModel:      NewScanModel(opts.Root, opts.MinSize),
-		options:        opts,
-		ctx:            ctx,
-		cancel:         cancel,
+		state:       StateResults,
+		resultModel: NewResultModel(nil), // Start with empty results
+		options:     opts,
+		ctx:         ctx,
+		cancel:      cancel,
+		scanProgress: ScanProgress{
+			Scanning:  true,
+			StartTime: time.Now(),
+		},
 		width:          80,
 		height:         24,
 		confirmFocused: 0,
 		deleteSpinner:  s,
+		fileChan:       make(chan types.FileInfo, 100),
 		progressChan:   make(chan types.ScanProgress, 100),
 	}
 }
@@ -95,8 +131,8 @@ func NewModel(opts Options) Model {
 // Init initializes the model.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		m.scanModel.Init(),
-		m.startScan(),
+		m.startStreamingScan(),
+		m.listenForFiles(),
 		m.listenForProgress(),
 		m.tickUI(),
 	)
@@ -112,6 +148,31 @@ func (m Model) tickUI() tea.Cmd {
 	})
 }
 
+// FileFoundMsg is sent when a new file is found during scanning.
+type FileFoundMsg struct {
+	File types.FileInfo
+}
+
+// ScanDoneMsg is sent when scanning completes.
+type ScanDoneMsg struct {
+	Err error
+}
+
+// LiveFileEventMsg is sent when a live file event is received from the daemon.
+type LiveFileEventMsg struct {
+	Event client.FileEvent
+}
+
+// LiveWatchStartedMsg is sent when live file watching starts successfully.
+type LiveWatchStartedMsg struct {
+	EventChan <-chan client.FileEvent
+}
+
+// LiveWatchErrorMsg is sent when live file watching encounters an error.
+type LiveWatchErrorMsg struct {
+	Err error
+}
+
 // Update handles messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -120,8 +181,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.scanModel.width = msg.Width
-		m.scanModel.height = msg.Height
 		m.resultModel.SetDimensions(msg.Width, msg.Height)
 		return m, nil
 
@@ -129,45 +188,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tickUIMsg:
-		// Keep UI refreshing during scanning
-		if m.state == StateScanning && !m.scanDone {
+		// Clear expired notifications
+		now := time.Now()
+		var activeNotifications []Notification
+		for _, n := range m.notifications {
+			if now.Before(n.Expires) {
+				activeNotifications = append(activeNotifications, n)
+			}
+		}
+		m.notifications = activeNotifications
+
+		// Keep UI refreshing during scanning or if we have notifications
+		if !m.scanDone || m.liveWatching || len(m.notifications) > 0 {
 			return m, m.tickUI()
 		}
 		return m, nil
 
 	case ProgressMsg:
-		m.scanModel.SetProgress(types.ScanProgress(msg))
+		m.scanProgress.DirsScanned = msg.DirsScanned
+		m.scanProgress.FilesScanned = msg.FilesScanned
+		m.scanProgress.CacheHits = msg.CacheHits
+		m.scanProgress.CacheMisses = msg.CacheMisses
 		// Keep listening for more progress
 		return m, m.listenForProgress()
 
-	case ScanCompleteMsg:
-		m.scanDone = true
-		m.scanErr = msg.Err
-		m.scanFiles = msg.Files
-		m.scanModel.SetDone(msg.Err)
+	case FileFoundMsg:
+		// Add file to results as it's found
+		m.resultModel.AddFile(msg.File)
+		// Keep listening for more files
+		return m, m.listenForFiles()
 
-		if msg.Err == nil {
-			// Transition to results with metrics
-			m.state = StateResults
-			metrics := ScanMetrics{
-				DirsScanned:  msg.DirsScanned,
-				FilesScanned: msg.FilesScanned,
-				CacheHits:    msg.CacheHits,
-				CacheMisses:  msg.CacheMisses,
-				Elapsed:      msg.Elapsed,
-			}
-			m.resultModel = NewResultModelWithMetrics(msg.Files, metrics)
-			m.resultModel.SetDimensions(m.width, m.height)
+	case ScanDoneMsg:
+		m.scanDone = true
+		m.scanProgress.Scanning = false
+		// Update metrics in result model
+		m.resultModel.metrics = ScanMetrics{
+			DirsScanned:  m.scanProgress.DirsScanned,
+			FilesScanned: m.scanProgress.FilesScanned,
+			CacheHits:    m.scanProgress.CacheHits,
+			CacheMisses:  m.scanProgress.CacheMisses,
+			Elapsed:      time.Since(m.scanProgress.StartTime),
+		}
+		// Start live file watching if daemon is available
+		if !m.options.NoDaemon {
+			return m, m.startLiveWatch()
 		}
 		return m, nil
 
+	case LiveWatchStartedMsg:
+		m.liveWatching = true
+		m.liveEventChan = msg.EventChan
+		return m, m.listenForLiveEvents()
+
+	case LiveWatchErrorMsg:
+		// Live watching failed, continue without it
+		m.liveWatching = false
+		return m, nil
+
+	case LiveFileEventMsg:
+		notification := handleLiveFileEvent(&m.resultModel, msg.Event)
+		if notification != nil {
+			m.notifications = append(m.notifications, *notification)
+		}
+		// Keep listening for more events
+		return m, m.listenForLiveEvents()
+
 	case spinner.TickMsg:
-		switch m.state {
-		case StateScanning:
-			var cmd tea.Cmd
-			m.scanModel.spinner, cmd = m.scanModel.spinner.Update(msg)
-			cmds = append(cmds, cmd)
-		case StateDeleting:
+		if m.state == StateDeleting {
 			var cmd tea.Cmd
 			m.deleteSpinner, cmd = m.deleteSpinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -203,12 +290,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// State-specific keys
 	switch m.state {
-	case StateScanning:
-		if key == "q" || key == "esc" {
-			m.cancel()
-			return m, tea.Quit
-		}
-
 	case StateResults:
 		switch key {
 		case "q", "esc":
@@ -258,10 +339,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // View renders the current state.
 func (m Model) View() string {
 	switch m.state {
-	case StateScanning:
-		return m.scanModel.View()
 	case StateResults:
-		return m.resultModel.View()
+		return m.resultModel.ViewWithProgressAndNotifications(m.scanProgress, m.notifications, m.liveWatching)
 	case StateConfirm:
 		return m.renderConfirmDialog()
 	case StateDeleting:
@@ -452,19 +531,17 @@ func (m Model) overlayDialog(bg, dialog string) string {
 	return strings.Join(result, "\n")
 }
 
-// startScan starts the scanning process.
-// It first tries to use the daemon if available, falling back to direct scan.
-func (m Model) startScan() tea.Cmd {
+// startStreamingScan starts the scanning process and streams files as they're found.
+func (m Model) startStreamingScan() tea.Cmd {
+	fileChan := m.fileChan
 	progressChan := m.progressChan
 	return func() tea.Msg {
-		startTime := time.Now()
-
 		// Try daemon first if not disabled
 		if !m.options.NoDaemon {
-			if result, ok := m.tryDaemonScan(); ok {
+			if m.tryDaemonStreamingScan(fileChan, progressChan) {
+				close(fileChan)
 				close(progressChan)
-				result.Elapsed = time.Since(startTime)
-				return result
+				return ScanDoneMsg{}
 			}
 		}
 
@@ -482,69 +559,72 @@ func (m Model) startScan() tea.Cmd {
 					// Channel full, skip this update
 				}
 			},
+			OnFile: func(f types.FileInfo) {
+				select {
+				case fileChan <- f:
+				default:
+					// Channel full, skip this file (shouldn't happen)
+				}
+			},
 			Cache: m.options.Cache,
 		}
 
 		s := scanner.New(opts)
-		result, err := s.Scan(m.ctx)
+		_, err := s.Scan(m.ctx)
 
-		// Close progress channel when scan completes
+		// Close channels when scan completes
+		close(fileChan)
 		close(progressChan)
 
 		if err != nil {
-			return ScanCompleteMsg{Err: err}
+			return ScanDoneMsg{Err: err}
 		}
 
-		// Sort by size descending
-		files := result.Files
-		sort.Slice(files, func(i, j int) bool {
-			return files[i].Size > files[j].Size
-		})
-
-		return ScanCompleteMsg{
-			Files:        files,
-			DirsScanned:  result.DirsScanned,
-			FilesScanned: result.FilesScanned,
-			CacheHits:    result.CacheHits,
-			CacheMisses:  result.CacheMisses,
-			Elapsed:      time.Since(startTime),
-		}
+		return ScanDoneMsg{}
 	}
 }
 
-// tryDaemonScan attempts to get results from the daemon.
-// Returns the result and true if successful, nil and false otherwise.
-func (m Model) tryDaemonScan() (ScanCompleteMsg, bool) {
+// listenForFiles returns a command that waits for files from the scanner.
+func (m Model) listenForFiles() tea.Cmd {
+	fileChan := m.fileChan
+	return func() tea.Msg {
+		f, ok := <-fileChan
+		if !ok {
+			// Channel closed, scan is done
+			return nil
+		}
+		return FileFoundMsg{File: f}
+	}
+}
+
+// tryDaemonStreamingScan attempts to get results from the daemon and stream them.
+// Returns true if the daemon was used, false otherwise.
+func (m Model) tryDaemonStreamingScan(fileChan chan types.FileInfo, progressChan chan types.ScanProgress) bool {
 	// Check if daemon is running
 	pidPath := client.DefaultPIDPath()
 	if !client.IsDaemonRunning(pidPath) {
-		return ScanCompleteMsg{}, false
+		return false
 	}
 
 	// Try to connect to daemon
 	socketPath := client.DefaultSocketPath()
 	daemonClient, err := client.ConnectWithContext(m.ctx, socketPath)
 	if err != nil {
-		return ScanCompleteMsg{}, false
+		return false
 	}
 	defer daemonClient.Close()
 
 	// Check if index is ready for this path
 	ready, err := daemonClient.IsIndexReady(m.ctx, m.options.Root)
 	if err != nil || !ready {
-		return ScanCompleteMsg{}, false
+		return false
 	}
 
 	// Query the daemon
 	files, err := daemonClient.GetLargeFiles(m.ctx, m.options.Root, m.options.MinSize, m.options.Exclude, 0)
 	if err != nil {
-		return ScanCompleteMsg{}, false
+		return false
 	}
-
-	// Sort files by size (largest first)
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Size > files[j].Size
-	})
 
 	// Get index status for statistics
 	var dirsIndexed, filesIndexed int64
@@ -553,13 +633,27 @@ func (m Model) tryDaemonScan() (ScanCompleteMsg, bool) {
 		filesIndexed = status.FilesIndexed
 	}
 
-	return ScanCompleteMsg{
-		Files:        files,
+	// Send progress
+	select {
+	case progressChan <- types.ScanProgress{
 		DirsScanned:  dirsIndexed,
 		FilesScanned: filesIndexed,
-		CacheHits:    filesIndexed, // All from daemon index
+		CacheHits:    filesIndexed,
 		CacheMisses:  0,
-	}, true
+	}:
+	default:
+	}
+
+	// Stream files one at a time (they come sorted from daemon)
+	for _, f := range files {
+		select {
+		case fileChan <- f:
+		case <-m.ctx.Done():
+			return true
+		}
+	}
+
+	return true
 }
 
 // listenForProgress returns a command that waits for progress updates.
@@ -573,6 +667,127 @@ func (m Model) listenForProgress() tea.Cmd {
 		}
 		return ProgressMsg(p)
 	}
+}
+
+// startLiveWatch starts watching for live file events from the daemon.
+func (m Model) startLiveWatch() tea.Cmd {
+	ctx := m.ctx
+	root := m.options.Root
+	minSize := m.options.MinSize
+	exclude := m.options.Exclude
+
+	return func() tea.Msg {
+		// Check if daemon is running
+		pidPath := client.DefaultPIDPath()
+		if !client.IsDaemonRunning(pidPath) {
+			return LiveWatchErrorMsg{Err: errors.New("daemon not running")}
+		}
+
+		// Connect to daemon
+		socketPath := client.DefaultSocketPath()
+		daemonClient, err := client.ConnectWithContext(ctx, socketPath)
+		if err != nil {
+			return LiveWatchErrorMsg{Err: err}
+		}
+
+		// Start watching for file events
+		eventChan, err := daemonClient.WatchLargeFiles(ctx, root, minSize, exclude)
+		if err != nil {
+			daemonClient.Close()
+			return LiveWatchErrorMsg{Err: err}
+		}
+
+		// Note: We don't close daemonClient here because the stream needs it to stay open.
+		// The connection will be closed when the context is cancelled.
+
+		return LiveWatchStartedMsg{EventChan: eventChan}
+	}
+}
+
+// listenForLiveEvents returns a command that waits for live file events.
+func (m Model) listenForLiveEvents() tea.Cmd {
+	eventChan := m.liveEventChan
+	return func() tea.Msg {
+		if eventChan == nil {
+			return nil
+		}
+		event, ok := <-eventChan
+		if !ok {
+			// Channel closed, watching stopped
+			return LiveWatchErrorMsg{Err: errors.New("live watch stream closed")}
+		}
+		return LiveFileEventMsg{Event: event}
+	}
+}
+
+// handleLiveFileEvent processes a live file event and updates the results.
+// Returns a notification if one should be shown.
+func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent) *Notification {
+	const notificationDuration = 3 * time.Second
+	expires := time.Now().Add(notificationDuration)
+
+	switch event.Type {
+	case "created":
+		// Add the new file to results
+		fi := types.FileInfo{
+			Path:    event.Path,
+			Size:    event.Size,
+			ModTime: time.Unix(event.ModTime, 0),
+		}
+		resultModel.AddFile(fi)
+		return &Notification{
+			Type:    NotificationAdded,
+			Message: fmt.Sprintf("+ %s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
+			Expires: expires,
+		}
+
+	case "modified":
+		// Update the file in results
+		resultModel.UpdateFile(event.Path, event.Size, time.Unix(event.ModTime, 0))
+		return &Notification{
+			Type:    NotificationModified,
+			Message: fmt.Sprintf("~ %s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
+			Expires: expires,
+		}
+
+	case "deleted":
+		// Remove the file from results
+		resultModel.RemoveFile(event.Path)
+		return &Notification{
+			Type:    NotificationRemoved,
+			Message: "- " + truncateFilename(event.Path, 40),
+			Expires: expires,
+		}
+
+	case "renamed":
+		// Treat rename as delete - the new name will trigger a create event
+		resultModel.RemoveFile(event.Path)
+		return &Notification{
+			Type:    NotificationRemoved,
+			Message: "↻ " + truncateFilename(event.Path, 40),
+			Expires: expires,
+		}
+	}
+	return nil
+}
+
+// truncateFilename truncates a filename (not path) to fit within maxLen.
+func truncateFilename(path string, maxLen int) string {
+	// Extract just the filename
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' || path[i] == '\\' {
+			path = path[i+1:]
+			break
+		}
+	}
+
+	if len(path) <= maxLen {
+		return path
+	}
+	if maxLen <= 3 {
+		return path[:maxLen]
+	}
+	return path[:maxLen-3] + "..."
 }
 
 // deleteProgressMsg reports deletion progress.

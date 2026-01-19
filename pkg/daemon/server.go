@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc"
 
 	sweepv1 "github.com/jamesainslie/sweep/pkg/api/sweep/v1"
+	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 )
 
@@ -20,11 +21,12 @@ type Config struct {
 
 // Server is the sweepd gRPC server.
 type Server struct {
-	cfg      Config
-	grpc     *grpc.Server
-	listener net.Listener
-	store    *store.Store
-	service  *Service
+	cfg         Config
+	grpc        *grpc.Server
+	listener    net.Listener
+	store       *store.Store
+	service     *Service
+	broadcaster *broadcaster.Broadcaster
 }
 
 // NewServer creates a new daemon server.
@@ -59,15 +61,19 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Create service
-	svc := NewService(st)
+	// Create broadcaster for file events
+	bc := broadcaster.New()
+
+	// Create service with broadcaster
+	svc := NewServiceWithBroadcaster(st, bc)
 
 	srv := &Server{
-		cfg:      cfg,
-		grpc:     grpc.NewServer(),
-		listener: listener,
-		store:    st,
-		service:  svc,
+		cfg:         cfg,
+		grpc:        grpc.NewServer(),
+		listener:    listener,
+		store:       st,
+		service:     svc,
+		broadcaster: bc,
 	}
 
 	// Register gRPC service
@@ -84,6 +90,9 @@ func (s *Server) Serve() error {
 // Close stops the server and cleans up.
 func (s *Server) Close() error {
 	s.grpc.GracefulStop()
+	if s.broadcaster != nil {
+		s.broadcaster.Close()
+	}
 	if s.store != nil {
 		_ = s.store.Close()
 	}

@@ -381,6 +381,11 @@ func (s *Scanner) processFile(path string, d fs.DirEntry) {
 	s.resultsMu.Lock()
 	s.results = append(s.results, fi)
 	s.resultsMu.Unlock()
+
+	// Call streaming callback if set.
+	if s.opts.OnFile != nil {
+		s.opts.OnFile(fi)
+	}
 }
 
 // addCacheEntry adds an entry to the cache entries map thread-safely.

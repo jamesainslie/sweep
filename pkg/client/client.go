@@ -50,6 +50,14 @@ type DaemonStatus struct {
 	TotalFilesIndexed int64
 }
 
+// FileEvent represents a file change event from the daemon.
+type FileEvent struct {
+	Type    string // "created", "modified", "deleted", "renamed"
+	Path    string
+	Size    int64
+	ModTime int64
+}
+
 // DefaultSocketPath returns the default Unix socket path for sweepd.
 func DefaultSocketPath() string {
 	return filepath.Join(xdg.DataHome, "sweep", "sweep.sock")
@@ -229,6 +237,63 @@ func (c *Client) ClearCache(ctx context.Context, path string) (int64, error) {
 	}
 
 	return resp.GetEntriesCleared(), nil
+}
+
+// WatchLargeFiles subscribes to file events for large files under a path.
+// Returns a channel that receives events until the context is cancelled.
+func (c *Client) WatchLargeFiles(ctx context.Context, root string, minSize int64, exclude []string) (<-chan FileEvent, error) {
+	req := &sweepv1.WatchRequest{
+		Root:    root,
+		MinSize: minSize,
+		Exclude: exclude,
+	}
+
+	stream, err := c.client.WatchLargeFiles(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("WatchLargeFiles RPC failed: %w", err)
+	}
+
+	events := make(chan FileEvent, 100)
+	go func() {
+		defer close(events)
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				return // Stream closed or error
+			}
+
+			typeStr := eventTypeToString(event.GetType())
+
+			select {
+			case events <- FileEvent{
+				Type:    typeStr,
+				Path:    event.GetPath(),
+				Size:    event.GetSize(),
+				ModTime: event.GetModTime(),
+			}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return events, nil
+}
+
+// eventTypeToString converts a FileEvent_EventType to string.
+func eventTypeToString(t sweepv1.FileEvent_EventType) string {
+	switch t {
+	case sweepv1.FileEvent_CREATED:
+		return "created"
+	case sweepv1.FileEvent_MODIFIED:
+		return "modified"
+	case sweepv1.FileEvent_DELETED:
+		return "deleted"
+	case sweepv1.FileEvent_RENAMED:
+		return "renamed"
+	default:
+		return "unknown"
+	}
 }
 
 // StartDaemon starts the sweepd daemon in the background.

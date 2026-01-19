@@ -26,6 +26,7 @@ const (
 	SweepDaemon_GetDaemonStatus_FullMethodName    = "/sweep.v1.SweepDaemon/GetDaemonStatus"
 	SweepDaemon_Shutdown_FullMethodName           = "/sweep.v1.SweepDaemon/Shutdown"
 	SweepDaemon_ClearCache_FullMethodName         = "/sweep.v1.SweepDaemon/ClearCache"
+	SweepDaemon_WatchLargeFiles_FullMethodName    = "/sweep.v1.SweepDaemon/WatchLargeFiles"
 )
 
 // SweepDaemonClient is the client API for SweepDaemon service.
@@ -48,6 +49,8 @@ type SweepDaemonClient interface {
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 	// Clear cache for a path
 	ClearCache(ctx context.Context, in *ClearCacheRequest, opts ...grpc.CallOption) (*ClearCacheResponse, error)
+	// Watch for file system changes (create, modify, delete, rename) in real-time
+	WatchLargeFiles(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileEvent], error)
 }
 
 type sweepDaemonClient struct {
@@ -146,6 +149,25 @@ func (c *sweepDaemonClient) ClearCache(ctx context.Context, in *ClearCacheReques
 	return out, nil
 }
 
+func (c *sweepDaemonClient) WatchLargeFiles(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SweepDaemon_ServiceDesc.Streams[2], SweepDaemon_WatchLargeFiles_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchRequest, FileEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SweepDaemon_WatchLargeFilesClient = grpc.ServerStreamingClient[FileEvent]
+
 // SweepDaemonServer is the server API for SweepDaemon service.
 // All implementations must embed UnimplementedSweepDaemonServer
 // for forward compatibility.
@@ -166,6 +188,8 @@ type SweepDaemonServer interface {
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	// Clear cache for a path
 	ClearCache(context.Context, *ClearCacheRequest) (*ClearCacheResponse, error)
+	// Watch for file system changes (create, modify, delete, rename) in real-time
+	WatchLargeFiles(*WatchRequest, grpc.ServerStreamingServer[FileEvent]) error
 	mustEmbedUnimplementedSweepDaemonServer()
 }
 
@@ -196,6 +220,9 @@ func (UnimplementedSweepDaemonServer) Shutdown(context.Context, *ShutdownRequest
 }
 func (UnimplementedSweepDaemonServer) ClearCache(context.Context, *ClearCacheRequest) (*ClearCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClearCache not implemented")
+}
+func (UnimplementedSweepDaemonServer) WatchLargeFiles(*WatchRequest, grpc.ServerStreamingServer[FileEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchLargeFiles not implemented")
 }
 func (UnimplementedSweepDaemonServer) mustEmbedUnimplementedSweepDaemonServer() {}
 func (UnimplementedSweepDaemonServer) testEmbeddedByValue()                     {}
@@ -330,6 +357,17 @@ func _SweepDaemon_ClearCache_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SweepDaemon_WatchLargeFiles_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(SweepDaemonServer).WatchLargeFiles(m, &grpc.GenericServerStream[WatchRequest, FileEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SweepDaemon_WatchLargeFilesServer = grpc.ServerStreamingServer[FileEvent]
+
 // SweepDaemon_ServiceDesc is the grpc.ServiceDesc for SweepDaemon service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -367,6 +405,11 @@ var SweepDaemon_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "WatchIndexProgress",
 			Handler:       _SweepDaemon_WatchIndexProgress_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchLargeFiles",
+			Handler:       _SweepDaemon_WatchLargeFiles_Handler,
 			ServerStreams: true,
 		},
 	},

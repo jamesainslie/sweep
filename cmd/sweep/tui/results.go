@@ -84,59 +84,32 @@ func (m ResultModel) Update(msg tea.Msg) (ResultModel, tea.Cmd) {
 
 // HandleKey handles key input for the result model.
 func (m *ResultModel) HandleKey(key string) tea.Cmd {
+	// Handle selection keys ourselves
 	switch key {
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-			m.table.SetCursor(m.cursor)
-		}
-
-	case "down", "j":
-		if m.cursor < len(m.files)-1 {
-			m.cursor++
-			m.table.SetCursor(m.cursor)
-		}
-
 	case " ":
 		m.Toggle(m.cursor)
 		m.updateTable()
+		return nil
 
 	case "a":
 		m.SelectAll()
 		m.updateTable()
+		return nil
 
 	case "n":
 		m.SelectNone()
 		m.updateTable()
-
-	case "home", "g":
-		m.cursor = 0
-		m.table.SetCursor(0)
-
-	case "end", "G":
-		if len(m.files) > 0 {
-			m.cursor = len(m.files) - 1
-			m.table.SetCursor(m.cursor)
-		}
-
-	case "pgup":
-		visibleRows := m.visibleRows()
-		m.cursor -= visibleRows
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		m.table.SetCursor(m.cursor)
-
-	case "pgdown":
-		visibleRows := m.visibleRows()
-		m.cursor += visibleRows
-		if m.cursor >= len(m.files) {
-			m.cursor = len(m.files) - 1
-		}
-		m.table.SetCursor(m.cursor)
+		return nil
 	}
 
-	return nil
+	// Pass navigation keys through the table's Update method
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+
+	// Sync our cursor with the table's cursor
+	m.cursor = m.table.Cursor()
+
+	return cmd
 }
 
 // View renders the result model.
@@ -284,16 +257,17 @@ func (m ResultModel) renderHelpBar(width int) string {
 // createTable creates and configures the file table.
 func (m ResultModel) createTable() table.Model {
 	// Calculate column widths based on available width
-	// Reserve space for: border (4), checkbox (5), size (10), spacing (6)
-	filenameWidth := m.width - 25
+	// Layout: checkbox (4) + size (10) + filename (rest) + padding (4)
+	contentWidth := m.width - 6 // Account for outer borders
+	filenameWidth := contentWidth - 18
 	if filenameWidth < 20 {
 		filenameWidth = 20
 	}
 
 	columns := []table.Column{
-		{Title: "", Width: 3},                  // Checkbox
-		{Title: "Size", Width: 10},             // Size
-		{Title: "File", Width: filenameWidth},  // Filename
+		{Title: "", Width: 4},                 // Checkbox [x]
+		{Title: "Size", Width: 10},            // Size
+		{Title: "File", Width: filenameWidth}, // Filename
 	}
 
 	rows := m.buildTableRows(filenameWidth)
@@ -303,6 +277,7 @@ func (m ResultModel) createTable() table.Model {
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(m.visibleRows()),
+		table.WithWidth(contentWidth),
 	)
 
 	// Style the table
@@ -320,6 +295,14 @@ func (m ResultModel) createTable() table.Model {
 	s.Cell = s.Cell.
 		Foreground(lipgloss.Color("#CCCCCC"))
 	t.SetStyles(s)
+
+	// Configure key bindings for vim-style navigation
+	t.KeyMap.LineUp.SetKeys("up", "k")
+	t.KeyMap.LineDown.SetKeys("down", "j")
+	t.KeyMap.GotoTop.SetKeys("home", "g")
+	t.KeyMap.GotoBottom.SetKeys("end", "G")
+	t.KeyMap.PageUp.SetKeys("pgup")
+	t.KeyMap.PageDown.SetKeys("pgdown")
 
 	return t
 }
@@ -350,7 +333,8 @@ func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
 
 // updateTable refreshes the table with current data.
 func (m *ResultModel) updateTable() {
-	filenameWidth := m.width - 25
+	contentWidth := m.width - 6
+	filenameWidth := contentWidth - 18
 	if filenameWidth < 20 {
 		filenameWidth = 20
 	}
@@ -400,7 +384,7 @@ func (m ResultModel) renderDetailPanel(file types.FileInfo, width int) string {
 		fullPath = "…" + fullPath[len(fullPath)-(maxPathLen-1):]
 	}
 
-	pathLine := fmt.Sprintf("  Path: %s", fullPath)
+	pathLine := "  Path: " + fullPath
 	b.WriteString(mutedTextStyle.Render(pathLine))
 	b.WriteString("\n")
 
@@ -415,7 +399,7 @@ func (m ResultModel) renderDetailPanel(file types.FileInfo, width int) string {
 
 	metaLine := fmt.Sprintf("  Modified: %s  |  Type: %s", modTime, ext)
 	if file.Owner != "" && file.Owner != "unknown" {
-		metaLine += fmt.Sprintf("  |  Owner: %s", file.Owner)
+		metaLine += "  |  Owner: " + file.Owner
 	}
 	b.WriteString(mutedTextStyle.Render(metaLine))
 	b.WriteString("\n")
@@ -448,21 +432,6 @@ func (m ResultModel) visibleRows() int {
 		available = 5
 	}
 	return available
-}
-
-// ensureVisible adjusts offset to keep cursor visible.
-func (m *ResultModel) ensureVisible() {
-	visibleRows := m.visibleRows()
-
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	} else if m.cursor >= m.offset+visibleRows {
-		m.offset = m.cursor - visibleRows + 1
-	}
-
-	if m.offset < 0 {
-		m.offset = 0
-	}
 }
 
 // Toggle toggles selection of the file at the given index.

@@ -8,7 +8,6 @@ import "github.com/charmbracelet/lipgloss"
 var (
 	// Primary colors
 	primaryColor = lipgloss.Color("#7D56F4")
-	accentColor  = lipgloss.Color("#00D9FF")
 
 	// Status colors
 	successColor = lipgloss.Color("#28A745")
@@ -59,43 +58,7 @@ var (
 				Foreground(warningColor)
 )
 
-// File list styles.
-var (
-	// selectedItemStyle for the currently highlighted item.
-	selectedItemStyle = lipgloss.NewStyle().
-				Background(highlightColor).
-				Foreground(lipgloss.Color("#FFFFFF")).
-				Bold(true)
-
-	// normalItemStyle for non-selected items.
-	normalItemStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#CCCCCC"))
-
-	// checkedStyle for selected checkbox.
-	checkedStyle = lipgloss.NewStyle().
-			Foreground(successColor).
-			Bold(true)
-
-	// uncheckedStyle for unselected checkbox.
-	uncheckedStyle = lipgloss.NewStyle().
-			Foreground(mutedColor)
-
-	// fileSizeStyle for file size display.
-	fileSizeStyle = lipgloss.NewStyle().
-			Width(10).
-			Align(lipgloss.Right).
-			Foreground(accentColor)
-
-	// fileDetailStyle for file metadata (modified, owner).
-	fileDetailStyle = lipgloss.NewStyle().
-			Foreground(mutedColor).
-			PaddingLeft(12)
-
-	// cursorStyle for the cursor indicator.
-	cursorStyle = lipgloss.NewStyle().
-			Foreground(primaryColor).
-			Bold(true)
-)
+// File list styles are now handled by the bubbles/table component.
 
 // Progress bar styles.
 var (

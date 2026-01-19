@@ -25,13 +25,14 @@ type ScanMetrics struct {
 
 // ResultModel represents the results phase of the TUI.
 type ResultModel struct {
-	files    []types.FileInfo
-	cursor   int
-	selected map[int]bool
-	offset   int // scroll offset
-	width    int
-	height   int
-	metrics  ScanMetrics
+	files         []types.FileInfo
+	cursor        int
+	selected      map[int]bool
+	offset        int // scroll offset
+	width         int
+	height        int
+	metrics       ScanMetrics
+	lastFreedSize int64 // Size freed in last delete operation
 }
 
 // NewResultModel creates a new result model with the given files.
@@ -225,7 +226,16 @@ func (m ResultModel) renderHeader(_ int) string {
 	totalSize := types.FormatSize(m.TotalSize())
 	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
 
-	return fmt.Sprintf(" %s %s%s", icon, appName, stats)
+	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
+
+	// Show freed size if any
+	if m.lastFreedSize > 0 {
+		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
+		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
+		header = header + freed
+	}
+
+	return header
 }
 
 // renderMetrics renders the scan metrics line.
@@ -534,6 +544,16 @@ func (m *ResultModel) SetDimensions(width, height int) {
 	m.height = height
 }
 
+// SetLastFreedSize sets the size freed in the last delete operation.
+func (m *ResultModel) SetLastFreedSize(size int64) {
+	m.lastFreedSize = size
+}
+
+// LastFreedSize returns the size freed in the last delete operation.
+func (m ResultModel) LastFreedSize() int64 {
+	return m.lastFreedSize
+}
+
 // AddFile inserts a file in sorted position (by size descending).
 // This method is used for streaming results as files are found.
 func (m *ResultModel) AddFile(file types.FileInfo) {
@@ -759,6 +779,13 @@ func (m ResultModel) renderHeaderWithLive(_ int, liveWatching bool) string {
 	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
 
 	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
+
+	// Show freed size if any
+	if m.lastFreedSize > 0 {
+		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
+		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
+		header = header + freed
+	}
 
 	if liveWatching {
 		liveIndicator := successTextStyle.Render("  ● LIVE")

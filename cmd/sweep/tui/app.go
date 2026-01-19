@@ -95,6 +95,7 @@ type Model struct {
 	deleteTotal        int
 	deleteErrors       []string
 	deleteProgressChan chan deleteProgressMsg
+	lastFreedSize      int64 // Size freed in last delete operation
 
 	// Window dimensions
 	width  int
@@ -328,7 +329,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// No key handling during delete
 
 	case StateComplete:
-		if key == "q" || key == "enter" || key == "esc" {
+		if key == "enter" || key == "esc" {
+			// Remove successfully deleted files from results and return to list
+			m.removeDeletedFiles()
+			m.state = StateResults
+			return m, nil
+		}
+		if key == "q" {
 			return m, tea.Quit
 		}
 	}
@@ -356,39 +363,74 @@ func (m Model) renderConfirmDialog() string {
 	// Background is the results view
 	bg := m.resultModel.View()
 
-	// Build dialog content
 	selectedCount := m.resultModel.SelectedCount()
 	selectedSize := m.resultModel.SelectedSize()
 
 	var dialogContent strings.Builder
-	dialogContent.WriteString(dialogTitleStyle.Render("Confirm Deletion"))
-	dialogContent.WriteString("\n\n")
-	dialogContent.WriteString(dialogTextStyle.Render(
-		fmt.Sprintf("Delete %d files (%s)?", selectedCount, types.FormatSize(selectedSize))))
+
+	// Warning icon and title
+	warningIcon := "⚠️"
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B")).Render("DELETE FILES")
+	dialogContent.WriteString(fmt.Sprintf("  %s  %s  %s\n", warningIcon, title, warningIcon))
+	dialogContent.WriteString("\n")
+
+	// Stats in a nice format
+	countStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+	sizeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
+
+	dialogContent.WriteString(fmt.Sprintf("       Files:  %s\n", countStyle.Render(fmt.Sprintf("%d", selectedCount))))
+	dialogContent.WriteString(fmt.Sprintf("       Size:   %s\n", sizeStyle.Render(types.FormatSize(selectedSize))))
 	dialogContent.WriteString("\n")
 
 	if m.options.DryRun {
-		dialogContent.WriteString(warningTextStyle.Render("(Dry run - no files will be deleted)"))
-		dialogContent.WriteString("\n")
+		dryRunStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC107")).Italic(true)
+		dialogContent.WriteString(center(dryRunStyle.Render("(Dry run - no files will be deleted)"), 44))
+		dialogContent.WriteString("\n\n")
 	}
 
-	dialogContent.WriteString("\n")
+	// Question
+	dialogContent.WriteString(center(dialogTextStyle.Render("This action cannot be undone."), 44))
+	dialogContent.WriteString("\n\n")
 
-	// Buttons
-	cancelBtn := inactiveButtonStyle.Render("Cancel")
-	deleteBtn := inactiveButtonStyle.Render("Delete")
+	// Buttons with better styling
+	cancelBtnStyle := lipgloss.NewStyle().
+		Padding(0, 3).
+		Margin(0, 1).
+		Background(lipgloss.Color("#444444")).
+		Foreground(lipgloss.Color("#CCCCCC"))
+
+	deleteBtnStyle := lipgloss.NewStyle().
+		Padding(0, 3).
+		Margin(0, 1).
+		Background(lipgloss.Color("#444444")).
+		Foreground(lipgloss.Color("#CCCCCC"))
 
 	if m.confirmFocused == 0 {
-		cancelBtn = activeButtonStyle.Render("Cancel")
+		cancelBtnStyle = cancelBtnStyle.
+			Background(lipgloss.Color("#666666")).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Bold(true)
 	} else {
-		deleteBtn = activeButtonStyle.Background(dangerColor).Render("Delete")
+		deleteBtnStyle = deleteBtnStyle.
+			Background(lipgloss.Color("#DC3545")).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Bold(true)
 	}
 
-	buttons := lipgloss.JoinHorizontal(lipgloss.Center, cancelBtn, "  ", deleteBtn)
-	dialogContent.WriteString(center(buttons, 46))
+	cancelBtn := cancelBtnStyle.Render("Cancel")
+	deleteBtn := deleteBtnStyle.Render("Delete")
 
-	// Render dialog box
-	dialog := dialogBoxStyle.Render(dialogContent.String())
+	buttons := lipgloss.JoinHorizontal(lipgloss.Center, cancelBtn, "    ", deleteBtn)
+	dialogContent.WriteString(center(buttons, 44))
+
+	// Render dialog box with updated style
+	dialogStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF6B6B")).
+		Padding(1, 2).
+		Width(48)
+
+	dialog := dialogStyle.Render(dialogContent.String())
 
 	// Center dialog over background
 	return m.overlayDialog(bg, dialog)
@@ -439,43 +481,66 @@ func (m Model) renderDeleting() string {
 
 // renderComplete renders the completion view.
 func (m Model) renderComplete() string {
-	contentWidth := m.width - 4
+	// Background is the results view
+	bg := m.resultModel.View()
 
-	var b strings.Builder
-	b.WriteString(successTextStyle.Render("  Deletion Complete"))
-	b.WriteString("\n")
-	b.WriteString(renderDivider(contentWidth))
-	b.WriteString("\n\n")
+	var dialogContent strings.Builder
 
 	deleted := m.deleteProgress - len(m.deleteErrors)
-	if m.options.DryRun {
-		b.WriteString(fmt.Sprintf("  Would have deleted: %d files\n", m.deleteTotal))
+
+	if len(m.deleteErrors) == 0 {
+		// Success
+		successIcon := "✅"
+		title := lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("COMPLETE")
+		dialogContent.WriteString(fmt.Sprintf("     %s  %s  %s\n", successIcon, title, successIcon))
 	} else {
-		b.WriteString(fmt.Sprintf("  Successfully deleted: %d files\n", deleted))
+		// Partial success
+		warnIcon := "⚠️"
+		title := lipgloss.NewStyle().Bold(true).Foreground(warningColor).Render("COMPLETED WITH ERRORS")
+		dialogContent.WriteString(fmt.Sprintf("  %s  %s  %s\n", warnIcon, title, warnIcon))
+	}
+	dialogContent.WriteString("\n")
+
+	// Stats
+	countStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+	sizeStyle := lipgloss.NewStyle().Bold(true).Foreground(successColor)
+
+	if m.options.DryRun {
+		dialogContent.WriteString(fmt.Sprintf("    Would delete:  %s files\n", countStyle.Render(fmt.Sprintf("%d", m.deleteTotal))))
+		dialogContent.WriteString(fmt.Sprintf("    Would free:    %s\n", sizeStyle.Render(types.FormatSize(m.lastFreedSize))))
+	} else {
+		dialogContent.WriteString(fmt.Sprintf("    Deleted:  %s files\n", countStyle.Render(fmt.Sprintf("%d", deleted))))
+		dialogContent.WriteString(fmt.Sprintf("    Freed:    %s\n", sizeStyle.Render(types.FormatSize(m.lastFreedSize))))
 	}
 
 	if len(m.deleteErrors) > 0 {
-		b.WriteString(errorTextStyle.Render(fmt.Sprintf("  Failed: %d files\n", len(m.deleteErrors))))
-		b.WriteString("\n")
-		b.WriteString(errorTextStyle.Render("  Errors:"))
-		b.WriteString("\n")
-		maxErrors := 5
-		for i, e := range m.deleteErrors {
-			if i >= maxErrors {
-				b.WriteString(errorTextStyle.Render(fmt.Sprintf("    ... and %d more", len(m.deleteErrors)-maxErrors)))
-				b.WriteString("\n")
-				break
-			}
-			b.WriteString(errorTextStyle.Render("    - " + truncatePath(e, contentWidth-6)))
-			b.WriteString("\n")
-		}
+		errorStyle := lipgloss.NewStyle().Foreground(dangerColor)
+		dialogContent.WriteString(fmt.Sprintf("    Failed:   %s\n", errorStyle.Render(fmt.Sprintf("%d files", len(m.deleteErrors)))))
 	}
 
-	b.WriteString("\n")
-	b.WriteString(center(keyStyle.Render("[Enter]")+" "+keyDescStyle.Render("Exit"), contentWidth))
-	b.WriteString("\n")
+	dialogContent.WriteString("\n")
 
-	return outerBoxStyle.Width(m.width - 2).Render(b.String())
+	// Instructions
+	enterKey := keyStyle.Render("[Enter]")
+	qKey := keyStyle.Render("[q]")
+	dialogContent.WriteString(center(enterKey+" "+keyDescStyle.Render("Continue")+"    "+qKey+" "+keyDescStyle.Render("Quit"), 44))
+
+	// Render dialog box
+	borderColor := successColor
+	if len(m.deleteErrors) > 0 {
+		borderColor = warningColor
+	}
+
+	dialogStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 2).
+		Width(48)
+
+	dialog := dialogStyle.Render(dialogContent.String())
+
+	// Center dialog over background
+	return m.overlayDialog(bg, dialog)
 }
 
 // overlayDialog centers a dialog over a background view.
@@ -803,6 +868,7 @@ func (m Model) startDelete() (tea.Model, tea.Cmd) {
 	m.deleteTotal = m.resultModel.SelectedCount()
 	m.deleteProgress = 0
 	m.deleteErrors = nil
+	m.lastFreedSize = m.resultModel.SelectedSize() // Track size being freed
 
 	files := m.resultModel.SelectedFiles()
 	dryRun := m.options.DryRun
@@ -851,6 +917,34 @@ func (m Model) listenForDeleteProgress() tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// removeDeletedFiles removes successfully deleted files from the results.
+func (m *Model) removeDeletedFiles() {
+	// Get the files that were selected for deletion
+	files := m.resultModel.SelectedFiles()
+
+	// Build a set of paths that had errors (weren't deleted)
+	errorPaths := make(map[string]bool)
+	for _, errPath := range m.deleteErrors {
+		errorPaths[errPath] = true
+	}
+
+	// Calculate actual freed size (excluding errors)
+	var actualFreedSize int64
+	for _, file := range files {
+		if !errorPaths[file.Path] && !m.options.DryRun {
+			actualFreedSize += file.Size
+			m.resultModel.RemoveFile(file.Path)
+		}
+	}
+
+	// Update the freed size (add to any previous freed size)
+	currentFreed := m.resultModel.LastFreedSize()
+	m.resultModel.SetLastFreedSize(currentFreed + actualFreedSize)
+
+	// Clear selection
+	m.resultModel.SelectNone()
 }
 
 // Run starts the TUI application.

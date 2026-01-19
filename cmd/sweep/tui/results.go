@@ -430,11 +430,18 @@ func (m ResultModel) renderFooter(width int) string {
 
 // visibleRows returns the number of visible rows for the file list.
 func (m ResultModel) visibleRows() int {
-	// Account for header (2), metrics (1), help (2), dividers (3), footer (2) = 10 lines overhead
-	// Plus 1 extra line for cursor item details
-	available := m.height - 11
-	if available < 5 {
-		available = 5
+	// Outer box uses Height(m.height - 2), giving us m.height - 2 lines of content space.
+	// Fixed overhead lines:
+	//   View(): top margin(1) + header(1) + metrics(1) + divider(1) + help(1) + divider(1) = 6
+	//   View(): footer divider(1) + footer(1) = 2
+	//   renderFileList(): column header(1) + divider(1) = 2
+	//   renderFileList(): detail panel divider(1) + path(1) + metadata(1) = 3
+	// Total overhead: 6 + 2 + 2 + 3 = 13 lines
+	// Plus outer box border reduction: 2 lines
+	// Available for file rows: m.height - 2 - 13 = m.height - 15
+	available := m.height - 15
+	if available < 3 {
+		available = 3
 	}
 	return available
 }

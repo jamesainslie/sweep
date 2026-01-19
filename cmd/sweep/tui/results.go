@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -274,7 +275,11 @@ func (m ResultModel) renderFileList(width int) string {
 	var b strings.Builder
 
 	visibleRows := m.visibleRows()
-	pathWidth := width - 18 // checkbox + size + padding
+	// Layout: checkbox(3) + size(9) + type(8) + cursor(2) + filename(rest)
+	filenameWidth := width - 26
+	if filenameWidth < 20 {
+		filenameWidth = 20
+	}
 
 	// Render visible files
 	for i := m.offset; i < m.offset+visibleRows && i < len(m.files); i++ {
@@ -283,11 +288,11 @@ func (m ResultModel) renderFileList(width int) string {
 		isCursor := i == m.cursor
 
 		// Build the line
-		line := m.renderFileLine(file, i, isSelected, isCursor, pathWidth)
+		line := m.renderFileLine(file, i, isSelected, isCursor, filenameWidth)
 		b.WriteString(line)
 		b.WriteString("\n")
 
-		// Show details for cursor item
+		// Show details for cursor item (includes full path)
 		if isCursor {
 			details := m.renderFileDetails(file, width)
 			b.WriteString(details)
@@ -319,7 +324,7 @@ func (m ResultModel) renderFileList(width int) string {
 }
 
 // renderFileLine renders a single file line.
-func (m ResultModel) renderFileLine(file types.FileInfo, index int, isSelected, isCursor bool, pathWidth int) string {
+func (m ResultModel) renderFileLine(file types.FileInfo, _ int, isSelected, isCursor bool, filenameWidth int) string {
 	// Checkbox
 	var checkbox string
 	if isSelected {
@@ -331,8 +336,23 @@ func (m ResultModel) renderFileLine(file types.FileInfo, index int, isSelected, 
 	// Size
 	size := fileSizeStyle.Render(padLeft(types.FormatSize(file.Size), 9))
 
-	// Path (truncated)
-	path := truncatePath(file.Path, pathWidth)
+	// File type (extension)
+	ext := filepath.Ext(file.Path)
+	if ext == "" {
+		ext = "-"
+	} else {
+		ext = ext[1:] // Remove leading dot
+	}
+	if len(ext) > 6 {
+		ext = ext[:6]
+	}
+	fileType := mutedTextStyle.Render(padLeft(ext, 6))
+
+	// Filename only (not full path)
+	filename := filepath.Base(file.Path)
+	if len(filename) > filenameWidth {
+		filename = filename[:filenameWidth-3] + "..."
+	}
 
 	// Cursor indicator
 	var cursor string
@@ -342,17 +362,17 @@ func (m ResultModel) renderFileLine(file types.FileInfo, index int, isSelected, 
 		cursor = " "
 	}
 
-	// Combine parts
-	line := fmt.Sprintf("  %s %s %s  %s", checkbox, size, cursor, path)
+	// Combine parts: checkbox + size + type + cursor + filename
+	line := fmt.Sprintf("  %s %s %s %s %s", checkbox, size, fileType, cursor, filename)
 
 	// Apply style based on cursor position
 	if isCursor {
-		return selectedItemStyle.Width(pathWidth + 20).Render(line)
+		return selectedItemStyle.Width(filenameWidth + 30).Render(line)
 	}
 	return normalItemStyle.Render(line)
 }
 
-// renderFileDetails renders the file detail line.
+// renderFileDetails renders the file detail line showing full path and metadata.
 func (m ResultModel) renderFileDetails(file types.FileInfo, width int) string {
 	modTime := file.ModTime.Format("2006-01-02")
 	owner := file.Owner
@@ -360,7 +380,17 @@ func (m ResultModel) renderFileDetails(file types.FileInfo, width int) string {
 		owner = "unknown"
 	}
 
-	details := fmt.Sprintf("Modified: %s  Owner: %s", modTime, owner)
+	// Show directory path (parent of the file)
+	dir := filepath.Dir(file.Path)
+	maxDirLen := width - 40 // Leave room for metadata
+	if maxDirLen < 20 {
+		maxDirLen = 20
+	}
+	if len(dir) > maxDirLen {
+		dir = "..." + dir[len(dir)-(maxDirLen-3):]
+	}
+
+	details := fmt.Sprintf("    %s  (Modified: %s, Owner: %s)", dir, modTime, owner)
 	return fileDetailStyle.Render(details)
 }
 

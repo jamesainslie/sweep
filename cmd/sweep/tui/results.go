@@ -141,6 +141,8 @@ func (m ResultModel) View() string {
 	var b strings.Builder
 
 	// Calculate dimensions
+	// Outer box has border (2 chars) but no padding, so content width is m.width - 4
+	// (m.width - 2 for outer box width, minus 2 for border)
 	contentWidth := m.width - 4
 	if contentWidth < 60 {
 		contentWidth = 60
@@ -323,8 +325,8 @@ func (m ResultModel) renderFileList(width int) string {
 		filename := filepath.Base(file.Path)
 
 		// Calculate available width for filename
-		// Layout: " " + checkbox + " " + size + "  " + filename
-		filenameWidth := width - 16
+		// Layout: " " + checkbox + " " + size + "  " + filename = 3 + 10 + 2 = 15 chars before filename
+		filenameWidth := width - 15
 		if filenameWidth < 20 {
 			filenameWidth = 20
 		}
@@ -332,8 +334,8 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Build the row - pad to full width
-		row := fmt.Sprintf(" %s  %s  %s", checkbox, size, filename)
+		// Build the row - checkbox centered in 3-char column, pad to full width
+		row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
 		rowLen := lipgloss.Width(row)
 		if rowLen < width {
 			row = row + strings.Repeat(" ", width-rowLen)

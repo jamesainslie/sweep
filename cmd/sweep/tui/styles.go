@@ -23,10 +23,10 @@ var (
 // Box styles for containers.
 var (
 	// outerBoxStyle is the main container style.
+	// No horizontal padding so highlighted rows can span edge-to-edge.
 	outerBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primaryColor).
-			Padding(0, 1)
+			BorderForeground(primaryColor)
 
 	// dividerStyle creates horizontal dividers.
 	dividerStyle = lipgloss.NewStyle().

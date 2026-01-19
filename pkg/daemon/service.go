@@ -70,12 +70,7 @@ func (s *Service) GetLargeFiles(req *sweepv1.GetLargeFilesRequest, stream grpc.S
 	root := req.GetPath()
 	minSize := req.GetMinSize()
 
-	// Check if large files index exists, rebuild if needed (migration)
-	if !s.store.HasLargeFilesIndex(root) && s.store.HasIndex(root) {
-		// Migrate: rebuild large files index from existing data
-		_, _ = s.store.RebuildLargeFilesIndex(root, s.indexer.MinLargeFileSize)
-	}
-
+	// Query the large files index (populated during indexing or migration)
 	files, err := s.store.GetLargeFiles(root, minSize, limit)
 	if err != nil {
 		return err

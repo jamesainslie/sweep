@@ -103,6 +103,11 @@ func (idx *Indexer) Index(ctx context.Context, root string, onProgress ProgressF
 		Dirs:  dirs,
 	})
 
+	// Ensure schema is up to date (new indexes are always current version)
+	if schema := idx.store.GetSchema(); schema == nil || schema.Version < store.CurrentSchemaVersion {
+		_ = idx.store.SetSchema(&store.Schema{Version: store.CurrentSchemaVersion})
+	}
+
 	return &Result{
 		Path:         absRoot,
 		DirsIndexed:  dirs,

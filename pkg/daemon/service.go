@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	sweepv1 "github.com/jamesainslie/sweep/pkg/api/sweep/v1"
+	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 )
@@ -26,9 +29,10 @@ type indexState struct {
 type Service struct {
 	sweepv1.UnimplementedSweepDaemonServer
 
-	store     *store.Store
-	indexer   *indexer.Indexer
-	startTime time.Time
+	store       *store.Store
+	indexer     *indexer.Indexer
+	broadcaster *broadcaster.Broadcaster
+	startTime   time.Time
 
 	// Track indexing state per path
 	indexMu     sync.RWMutex
@@ -79,26 +83,26 @@ func (s *Service) GetIndexStatus(_ context.Context, req *sweepv1.GetIndexStatusR
 	state, exists := s.indexStates[reqPath]
 	s.indexMu.RUnlock()
 
-	status := &sweepv1.IndexStatus{
+	idxStatus := &sweepv1.IndexStatus{
 		Path: reqPath,
 	}
 
 	switch {
 	case exists:
-		status.State = state.state
-		status.Progress = state.progress
-		status.FilesIndexed = state.files
-		status.DirsIndexed = state.dirs
+		idxStatus.State = state.state
+		idxStatus.Progress = state.progress
+		idxStatus.FilesIndexed = state.files
+		idxStatus.DirsIndexed = state.dirs
 	case s.store.HasIndex(reqPath):
-		status.State = sweepv1.IndexState_INDEX_STATE_READY
+		idxStatus.State = sweepv1.IndexState_INDEX_STATE_READY
 		files, dirs, _ := s.store.CountEntries(reqPath)
-		status.FilesIndexed = files
-		status.DirsIndexed = dirs
+		idxStatus.FilesIndexed = files
+		idxStatus.DirsIndexed = dirs
 	default:
-		status.State = sweepv1.IndexState_INDEX_STATE_NOT_INDEXED
+		idxStatus.State = sweepv1.IndexState_INDEX_STATE_NOT_INDEXED
 	}
 
-	return status, nil
+	return idxStatus, nil
 }
 
 // TriggerIndex starts indexing a path.
@@ -260,4 +264,38 @@ func (s *Service) ClearCache(_ context.Context, req *sweepv1.ClearCacheRequest) 
 		Success:        true,
 		EntriesCleared: count,
 	}, nil
+}
+
+// WatchLargeFiles streams file system events for large files in real-time.
+func (s *Service) WatchLargeFiles(req *sweepv1.WatchRequest, stream grpc.ServerStreamingServer[sweepv1.FileEvent]) error {
+	if s.broadcaster == nil {
+		return status.Error(codes.Unavailable, "file watching not available")
+	}
+
+	sub := s.broadcaster.Subscribe(req.GetRoot(), req.GetMinSize(), req.GetExclude())
+	if sub == nil {
+		return status.Error(codes.Unavailable, "failed to subscribe")
+	}
+	defer s.broadcaster.Unsubscribe(sub.ID)
+
+	ctx := stream.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-sub.Events:
+			if !ok {
+				return nil
+			}
+			protoEvent := &sweepv1.FileEvent{
+				Type:    sweepv1.FileEvent_EventType(event.Type),
+				Path:    event.Path,
+				Size:    event.Size,
+				ModTime: event.ModTime,
+			}
+			if err := stream.Send(protoEvent); err != nil {
+				return err
+			}
+		}
+	}
 }

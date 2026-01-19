@@ -151,6 +151,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 // runInteractiveTUI runs the TUI application.
 func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 	dryRun := viper.GetBool("dry_run")
+	noDaemon := viper.GetBool("no_daemon")
 
 	tuiOpts := tui.Options{
 		Root:        opts.Root,
@@ -159,6 +160,7 @@ func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 		DirWorkers:  opts.DirWorkers,
 		FileWorkers: opts.FileWorkers,
 		DryRun:      dryRun,
+		NoDaemon:    noDaemon,
 		Cache:       c,
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
@@ -35,6 +36,7 @@ type Options struct {
 	DirWorkers  int
 	FileWorkers int
 	DryRun      bool
+	NoDaemon    bool
 	Cache       *cache.Cache
 }
 
@@ -451,9 +453,22 @@ func (m Model) overlayDialog(bg, dialog string) string {
 }
 
 // startScan starts the scanning process.
+// It first tries to use the daemon if available, falling back to direct scan.
 func (m Model) startScan() tea.Cmd {
 	progressChan := m.progressChan
 	return func() tea.Msg {
+		startTime := time.Now()
+
+		// Try daemon first if not disabled
+		if !m.options.NoDaemon {
+			if result, ok := m.tryDaemonScan(); ok {
+				close(progressChan)
+				result.Elapsed = time.Since(startTime)
+				return result
+			}
+		}
+
+		// Fall back to direct scan
 		opts := scanner.Options{
 			Root:        m.options.Root,
 			MinSize:     m.options.MinSize,
@@ -492,9 +507,59 @@ func (m Model) startScan() tea.Cmd {
 			FilesScanned: result.FilesScanned,
 			CacheHits:    result.CacheHits,
 			CacheMisses:  result.CacheMisses,
-			Elapsed:      result.Elapsed,
+			Elapsed:      time.Since(startTime),
 		}
 	}
+}
+
+// tryDaemonScan attempts to get results from the daemon.
+// Returns the result and true if successful, nil and false otherwise.
+func (m Model) tryDaemonScan() (ScanCompleteMsg, bool) {
+	// Check if daemon is running
+	pidPath := client.DefaultPIDPath()
+	if !client.IsDaemonRunning(pidPath) {
+		return ScanCompleteMsg{}, false
+	}
+
+	// Try to connect to daemon
+	socketPath := client.DefaultSocketPath()
+	daemonClient, err := client.ConnectWithContext(m.ctx, socketPath)
+	if err != nil {
+		return ScanCompleteMsg{}, false
+	}
+	defer daemonClient.Close()
+
+	// Check if index is ready for this path
+	ready, err := daemonClient.IsIndexReady(m.ctx, m.options.Root)
+	if err != nil || !ready {
+		return ScanCompleteMsg{}, false
+	}
+
+	// Query the daemon
+	files, err := daemonClient.GetLargeFiles(m.ctx, m.options.Root, m.options.MinSize, m.options.Exclude, 0)
+	if err != nil {
+		return ScanCompleteMsg{}, false
+	}
+
+	// Sort files by size (largest first)
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Size > files[j].Size
+	})
+
+	// Get index status for statistics
+	var dirsIndexed, filesIndexed int64
+	if status, err := daemonClient.GetIndexStatus(m.ctx, m.options.Root); err == nil && status != nil {
+		dirsIndexed = status.DirsIndexed
+		filesIndexed = status.FilesIndexed
+	}
+
+	return ScanCompleteMsg{
+		Files:        files,
+		DirsScanned:  dirsIndexed,
+		FilesScanned: filesIndexed,
+		CacheHits:    filesIndexed, // All from daemon index
+		CacheMisses:  0,
+	}, true
 }
 
 // listenForProgress returns a command that waits for progress updates.

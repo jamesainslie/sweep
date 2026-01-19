@@ -26,6 +26,9 @@ service SweepDaemon {
 
   // Clear cache for a path
   rpc ClearCache(ClearCacheRequest) returns (ClearCacheResponse);
+
+  // Watch for file system changes (create, modify, delete, rename) in real-time
+  rpc WatchLargeFiles(WatchRequest) returns (stream FileEvent);
 }
 
 message GetLargeFilesRequest {
@@ -114,4 +117,26 @@ message ClearCacheRequest {
 message ClearCacheResponse {
   bool success = 1;
   int64 entries_cleared = 2;
+}
+
+// Request to watch for file system changes
+message WatchRequest {
+  string root = 1;
+  int64 min_size = 2;
+  repeated string exclude = 3;
+}
+
+// Event emitted when a file changes
+message FileEvent {
+  enum EventType {
+    CREATED = 0;
+    MODIFIED = 1;
+    DELETED = 2;
+    RENAMED = 3;
+  }
+
+  EventType type = 1;
+  string path = 2;
+  int64 size = 3;
+  int64 mod_time = 4;
 }

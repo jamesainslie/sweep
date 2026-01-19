@@ -76,6 +76,58 @@ func (IndexState) EnumDescriptor() ([]byte, []int) {
 	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{0}
 }
 
+type FileEvent_EventType int32
+
+const (
+	FileEvent_CREATED  FileEvent_EventType = 0
+	FileEvent_MODIFIED FileEvent_EventType = 1
+	FileEvent_DELETED  FileEvent_EventType = 2
+	FileEvent_RENAMED  FileEvent_EventType = 3
+)
+
+// Enum value maps for FileEvent_EventType.
+var (
+	FileEvent_EventType_name = map[int32]string{
+		0: "CREATED",
+		1: "MODIFIED",
+		2: "DELETED",
+		3: "RENAMED",
+	}
+	FileEvent_EventType_value = map[string]int32{
+		"CREATED":  0,
+		"MODIFIED": 1,
+		"DELETED":  2,
+		"RENAMED":  3,
+	}
+)
+
+func (x FileEvent_EventType) Enum() *FileEvent_EventType {
+	p := new(FileEvent_EventType)
+	*p = x
+	return p
+}
+
+func (x FileEvent_EventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FileEvent_EventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_sweep_v1_sweep_proto_enumTypes[1].Descriptor()
+}
+
+func (FileEvent_EventType) Type() protoreflect.EnumType {
+	return &file_sweep_v1_sweep_proto_enumTypes[1]
+}
+
+func (x FileEvent_EventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FileEvent_EventType.Descriptor instead.
+func (FileEvent_EventType) EnumDescriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{15, 0}
+}
+
 type GetLargeFilesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -900,6 +952,136 @@ func (x *ClearCacheResponse) GetEntriesCleared() int64 {
 	return 0
 }
 
+// Request to watch for file system changes
+type WatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	MinSize       int64                  `protobuf:"varint,2,opt,name=min_size,json=minSize,proto3" json:"min_size,omitempty"`
+	Exclude       []string               `protobuf:"bytes,3,rep,name=exclude,proto3" json:"exclude,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchRequest) Reset() {
+	*x = WatchRequest{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchRequest) ProtoMessage() {}
+
+func (x *WatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
+func (*WatchRequest) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *WatchRequest) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+func (x *WatchRequest) GetMinSize() int64 {
+	if x != nil {
+		return x.MinSize
+	}
+	return 0
+}
+
+func (x *WatchRequest) GetExclude() []string {
+	if x != nil {
+		return x.Exclude
+	}
+	return nil
+}
+
+// Event emitted when a file changes
+type FileEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          FileEvent_EventType    `protobuf:"varint,1,opt,name=type,proto3,enum=sweep.v1.FileEvent_EventType" json:"type,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	ModTime       int64                  `protobuf:"varint,4,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileEvent) Reset() {
+	*x = FileEvent{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileEvent) ProtoMessage() {}
+
+func (x *FileEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileEvent.ProtoReflect.Descriptor instead.
+func (*FileEvent) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *FileEvent) GetType() FileEvent_EventType {
+	if x != nil {
+		return x.Type
+	}
+	return FileEvent_CREATED
+}
+
+func (x *FileEvent) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileEvent) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *FileEvent) GetModTime() int64 {
+	if x != nil {
+		return x.ModTime
+	}
+	return 0
+}
+
 var File_sweep_v1_sweep_proto protoreflect.FileDescriptor
 
 const file_sweep_v1_sweep_proto_rawDesc = "" +
@@ -960,14 +1142,28 @@ const file_sweep_v1_sweep_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"W\n" +
 	"\x12ClearCacheResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12'\n" +
-	"\x0fentries_cleared\x18\x02 \x01(\x03R\x0eentriesCleared*\x8a\x01\n" +
+	"\x0fentries_cleared\x18\x02 \x01(\x03R\x0eentriesCleared\"W\n" +
+	"\fWatchRequest\x12\x12\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root\x12\x19\n" +
+	"\bmin_size\x18\x02 \x01(\x03R\aminSize\x12\x18\n" +
+	"\aexclude\x18\x03 \x03(\tR\aexclude\"\xc3\x01\n" +
+	"\tFileEvent\x121\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x1d.sweep.v1.FileEvent.EventTypeR\x04type\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x19\n" +
+	"\bmod_time\x18\x04 \x01(\x03R\amodTime\"@\n" +
+	"\tEventType\x12\v\n" +
+	"\aCREATED\x10\x00\x12\f\n" +
+	"\bMODIFIED\x10\x01\x12\v\n" +
+	"\aDELETED\x10\x02\x12\v\n" +
+	"\aRENAMED\x10\x03*\x8a\x01\n" +
 	"\n" +
 	"IndexState\x12\x17\n" +
 	"\x13INDEX_STATE_UNKNOWN\x10\x00\x12\x1b\n" +
 	"\x17INDEX_STATE_NOT_INDEXED\x10\x01\x12\x18\n" +
 	"\x14INDEX_STATE_INDEXING\x10\x02\x12\x15\n" +
 	"\x11INDEX_STATE_READY\x10\x03\x12\x15\n" +
-	"\x11INDEX_STATE_STALE\x10\x042\x9c\x04\n" +
+	"\x11INDEX_STATE_STALE\x10\x042\xde\x04\n" +
 	"\vSweepDaemon\x12E\n" +
 	"\rGetLargeFiles\x12\x1e.sweep.v1.GetLargeFilesRequest\x1a\x12.sweep.v1.FileInfo0\x01\x12H\n" +
 	"\x0eGetIndexStatus\x12\x1f.sweep.v1.GetIndexStatusRequest\x1a\x15.sweep.v1.IndexStatus\x12M\n" +
@@ -976,7 +1172,8 @@ const file_sweep_v1_sweep_proto_rawDesc = "" +
 	"\x0fGetDaemonStatus\x12 .sweep.v1.GetDaemonStatusRequest\x1a\x16.sweep.v1.DaemonStatus\x12A\n" +
 	"\bShutdown\x12\x19.sweep.v1.ShutdownRequest\x1a\x1a.sweep.v1.ShutdownResponse\x12G\n" +
 	"\n" +
-	"ClearCache\x12\x1b.sweep.v1.ClearCacheRequest\x1a\x1c.sweep.v1.ClearCacheResponseB\x93\x01\n" +
+	"ClearCache\x12\x1b.sweep.v1.ClearCacheRequest\x1a\x1c.sweep.v1.ClearCacheResponse\x12@\n" +
+	"\x0fWatchLargeFiles\x12\x16.sweep.v1.WatchRequest\x1a\x13.sweep.v1.FileEvent0\x01B\x93\x01\n" +
 	"\fcom.sweep.v1B\n" +
 	"SweepProtoP\x01Z6github.com/jamesainslie/sweep/pkg/api/sweep/v1;sweepv1\xa2\x02\x03SXX\xaa\x02\bSweep.V1\xca\x02\bSweep\\V1\xe2\x02\x14Sweep\\V1\\GPBMetadata\xea\x02\tSweep::V1b\x06proto3"
 
@@ -992,47 +1189,53 @@ func file_sweep_v1_sweep_proto_rawDescGZIP() []byte {
 	return file_sweep_v1_sweep_proto_rawDescData
 }
 
-var file_sweep_v1_sweep_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_sweep_v1_sweep_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_sweep_v1_sweep_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_sweep_v1_sweep_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_sweep_v1_sweep_proto_goTypes = []any{
 	(IndexState)(0),                   // 0: sweep.v1.IndexState
-	(*GetLargeFilesRequest)(nil),      // 1: sweep.v1.GetLargeFilesRequest
-	(*FileInfo)(nil),                  // 2: sweep.v1.FileInfo
-	(*GetIndexStatusRequest)(nil),     // 3: sweep.v1.GetIndexStatusRequest
-	(*IndexStatus)(nil),               // 4: sweep.v1.IndexStatus
-	(*TriggerIndexRequest)(nil),       // 5: sweep.v1.TriggerIndexRequest
-	(*TriggerIndexResponse)(nil),      // 6: sweep.v1.TriggerIndexResponse
-	(*WatchIndexProgressRequest)(nil), // 7: sweep.v1.WatchIndexProgressRequest
-	(*IndexProgress)(nil),             // 8: sweep.v1.IndexProgress
-	(*GetDaemonStatusRequest)(nil),    // 9: sweep.v1.GetDaemonStatusRequest
-	(*DaemonStatus)(nil),              // 10: sweep.v1.DaemonStatus
-	(*ShutdownRequest)(nil),           // 11: sweep.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),          // 12: sweep.v1.ShutdownResponse
-	(*ClearCacheRequest)(nil),         // 13: sweep.v1.ClearCacheRequest
-	(*ClearCacheResponse)(nil),        // 14: sweep.v1.ClearCacheResponse
+	(FileEvent_EventType)(0),          // 1: sweep.v1.FileEvent.EventType
+	(*GetLargeFilesRequest)(nil),      // 2: sweep.v1.GetLargeFilesRequest
+	(*FileInfo)(nil),                  // 3: sweep.v1.FileInfo
+	(*GetIndexStatusRequest)(nil),     // 4: sweep.v1.GetIndexStatusRequest
+	(*IndexStatus)(nil),               // 5: sweep.v1.IndexStatus
+	(*TriggerIndexRequest)(nil),       // 6: sweep.v1.TriggerIndexRequest
+	(*TriggerIndexResponse)(nil),      // 7: sweep.v1.TriggerIndexResponse
+	(*WatchIndexProgressRequest)(nil), // 8: sweep.v1.WatchIndexProgressRequest
+	(*IndexProgress)(nil),             // 9: sweep.v1.IndexProgress
+	(*GetDaemonStatusRequest)(nil),    // 10: sweep.v1.GetDaemonStatusRequest
+	(*DaemonStatus)(nil),              // 11: sweep.v1.DaemonStatus
+	(*ShutdownRequest)(nil),           // 12: sweep.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),          // 13: sweep.v1.ShutdownResponse
+	(*ClearCacheRequest)(nil),         // 14: sweep.v1.ClearCacheRequest
+	(*ClearCacheResponse)(nil),        // 15: sweep.v1.ClearCacheResponse
+	(*WatchRequest)(nil),              // 16: sweep.v1.WatchRequest
+	(*FileEvent)(nil),                 // 17: sweep.v1.FileEvent
 }
 var file_sweep_v1_sweep_proto_depIdxs = []int32{
 	0,  // 0: sweep.v1.IndexStatus.state:type_name -> sweep.v1.IndexState
 	0,  // 1: sweep.v1.IndexProgress.state:type_name -> sweep.v1.IndexState
-	1,  // 2: sweep.v1.SweepDaemon.GetLargeFiles:input_type -> sweep.v1.GetLargeFilesRequest
-	3,  // 3: sweep.v1.SweepDaemon.GetIndexStatus:input_type -> sweep.v1.GetIndexStatusRequest
-	5,  // 4: sweep.v1.SweepDaemon.TriggerIndex:input_type -> sweep.v1.TriggerIndexRequest
-	7,  // 5: sweep.v1.SweepDaemon.WatchIndexProgress:input_type -> sweep.v1.WatchIndexProgressRequest
-	9,  // 6: sweep.v1.SweepDaemon.GetDaemonStatus:input_type -> sweep.v1.GetDaemonStatusRequest
-	11, // 7: sweep.v1.SweepDaemon.Shutdown:input_type -> sweep.v1.ShutdownRequest
-	13, // 8: sweep.v1.SweepDaemon.ClearCache:input_type -> sweep.v1.ClearCacheRequest
-	2,  // 9: sweep.v1.SweepDaemon.GetLargeFiles:output_type -> sweep.v1.FileInfo
-	4,  // 10: sweep.v1.SweepDaemon.GetIndexStatus:output_type -> sweep.v1.IndexStatus
-	6,  // 11: sweep.v1.SweepDaemon.TriggerIndex:output_type -> sweep.v1.TriggerIndexResponse
-	8,  // 12: sweep.v1.SweepDaemon.WatchIndexProgress:output_type -> sweep.v1.IndexProgress
-	10, // 13: sweep.v1.SweepDaemon.GetDaemonStatus:output_type -> sweep.v1.DaemonStatus
-	12, // 14: sweep.v1.SweepDaemon.Shutdown:output_type -> sweep.v1.ShutdownResponse
-	14, // 15: sweep.v1.SweepDaemon.ClearCache:output_type -> sweep.v1.ClearCacheResponse
-	9,  // [9:16] is the sub-list for method output_type
-	2,  // [2:9] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	1,  // 2: sweep.v1.FileEvent.type:type_name -> sweep.v1.FileEvent.EventType
+	2,  // 3: sweep.v1.SweepDaemon.GetLargeFiles:input_type -> sweep.v1.GetLargeFilesRequest
+	4,  // 4: sweep.v1.SweepDaemon.GetIndexStatus:input_type -> sweep.v1.GetIndexStatusRequest
+	6,  // 5: sweep.v1.SweepDaemon.TriggerIndex:input_type -> sweep.v1.TriggerIndexRequest
+	8,  // 6: sweep.v1.SweepDaemon.WatchIndexProgress:input_type -> sweep.v1.WatchIndexProgressRequest
+	10, // 7: sweep.v1.SweepDaemon.GetDaemonStatus:input_type -> sweep.v1.GetDaemonStatusRequest
+	12, // 8: sweep.v1.SweepDaemon.Shutdown:input_type -> sweep.v1.ShutdownRequest
+	14, // 9: sweep.v1.SweepDaemon.ClearCache:input_type -> sweep.v1.ClearCacheRequest
+	16, // 10: sweep.v1.SweepDaemon.WatchLargeFiles:input_type -> sweep.v1.WatchRequest
+	3,  // 11: sweep.v1.SweepDaemon.GetLargeFiles:output_type -> sweep.v1.FileInfo
+	5,  // 12: sweep.v1.SweepDaemon.GetIndexStatus:output_type -> sweep.v1.IndexStatus
+	7,  // 13: sweep.v1.SweepDaemon.TriggerIndex:output_type -> sweep.v1.TriggerIndexResponse
+	9,  // 14: sweep.v1.SweepDaemon.WatchIndexProgress:output_type -> sweep.v1.IndexProgress
+	11, // 15: sweep.v1.SweepDaemon.GetDaemonStatus:output_type -> sweep.v1.DaemonStatus
+	13, // 16: sweep.v1.SweepDaemon.Shutdown:output_type -> sweep.v1.ShutdownResponse
+	15, // 17: sweep.v1.SweepDaemon.ClearCache:output_type -> sweep.v1.ClearCacheResponse
+	17, // 18: sweep.v1.SweepDaemon.WatchLargeFiles:output_type -> sweep.v1.FileEvent
+	11, // [11:19] is the sub-list for method output_type
+	3,  // [3:11] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_sweep_v1_sweep_proto_init() }
@@ -1045,8 +1248,8 @@ func file_sweep_v1_sweep_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sweep_v1_sweep_proto_rawDesc), len(file_sweep_v1_sweep_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   14,
+			NumEnums:      2,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

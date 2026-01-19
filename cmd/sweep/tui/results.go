@@ -698,11 +698,8 @@ func (m ResultModel) ViewWithProgress(progress ScanProgress) string {
 
 // ViewWithProgressAndNotifications renders the results with progress, notifications, and live status.
 func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, notifications []Notification, liveWatching bool) string {
-	if len(m.files) == 0 && progress.Scanning {
-		return m.renderScanning(progress)
-	}
-
-	if len(m.files) == 0 {
+	// Show empty state only when scan is complete and no files found
+	if len(m.files) == 0 && !progress.Scanning {
 		return m.renderEmpty()
 	}
 
@@ -829,35 +826,6 @@ func (m ResultModel) renderNotifications(width int, notifications []Notification
 	}
 
 	return b.String()
-}
-
-// renderScanning renders the initial scanning state before any files are found.
-func (m ResultModel) renderScanning(progress ScanProgress) string {
-	contentWidth := m.width - 4
-	if contentWidth < 60 {
-		contentWidth = 60
-	}
-
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("  sweep - scanning..."))
-	b.WriteString("\n")
-	b.WriteString(renderDivider(contentWidth))
-	b.WriteString("\n\n")
-
-	// Progress stats.
-	elapsed := time.Since(progress.StartTime).Round(time.Millisecond)
-	stats := fmt.Sprintf("  Dirs: %s  Files: %s  Time: %v",
-		humanize.Comma(progress.DirsScanned),
-		humanize.Comma(progress.FilesScanned),
-		elapsed)
-	b.WriteString(mutedTextStyle.Render(stats))
-	b.WriteString("\n\n")
-
-	b.WriteString(center(mutedTextStyle.Render("Searching for large files..."), contentWidth))
-	b.WriteString("\n")
-
-	return outerBoxStyle.Width(m.width - 2).Height(m.height - 2).Render(b.String())
 }
 
 // renderMetricsWithProgress renders metrics including real-time progress.

@@ -57,10 +57,11 @@ type Model struct {
 	confirmFocused int // 0 = cancel, 1 = delete
 
 	// Deleting state
-	deleteSpinner  spinner.Model
-	deleteProgress int
-	deleteTotal    int
-	deleteErrors   []string
+	deleteSpinner      spinner.Model
+	deleteProgress     int
+	deleteTotal        int
+	deleteErrors       []string
+	deleteProgressChan chan deleteProgressMsg
 
 	// Window dimensions
 	width  int
@@ -178,8 +179,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.done {
 			m.state = StateComplete
+			return m, nil
 		}
-		return m, nil
+		// Keep listening for more progress
+		return m, m.listenForDeleteProgress()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -524,33 +527,50 @@ func (m Model) startDelete() (tea.Model, tea.Cmd) {
 	files := m.resultModel.SelectedFiles()
 	dryRun := m.options.DryRun
 
-	cmd := func() tea.Msg {
+	// Create channel for progress updates
+	m.deleteProgressChan = make(chan deleteProgressMsg, 100)
+	progressChan := m.deleteProgressChan
+
+	// Start deletion in background
+	go func() {
 		for i, file := range files {
 			var err error
 			if !dryRun {
 				err = os.Remove(file.Path)
 			}
 
-			// Send progress update through program
-			// Note: In real implementation, use program.Send()
-			// For now, we'll batch at the end
-
-			if err != nil {
-				m.deleteErrors = append(m.deleteErrors, fmt.Sprintf("%s: %v", file.Path, err))
+			// Send progress update (non-blocking)
+			select {
+			case progressChan <- deleteProgressMsg{current: i + 1, done: false, err: err}:
+			default:
+				// Channel full, skip this update
 			}
-
-			// Small delay for visual feedback
-			time.Sleep(10 * time.Millisecond)
-			_ = i // Progress tracking would go here
 		}
 
-		return deleteProgressMsg{
+		// Send final completion message
+		progressChan <- deleteProgressMsg{
 			current: len(files),
 			done:    true,
 		}
-	}
+		close(progressChan)
+	}()
 
-	return m, tea.Batch(m.deleteSpinner.Tick, cmd)
+	return m, tea.Batch(m.deleteSpinner.Tick, m.listenForDeleteProgress())
+}
+
+// listenForDeleteProgress returns a command that waits for delete progress updates.
+func (m Model) listenForDeleteProgress() tea.Cmd {
+	progressChan := m.deleteProgressChan
+	return func() tea.Msg {
+		if progressChan == nil {
+			return deleteProgressMsg{current: m.deleteTotal, done: true}
+		}
+		msg, ok := <-progressChan
+		if !ok {
+			return deleteProgressMsg{current: m.deleteTotal, done: true}
+		}
+		return msg
+	}
 }
 
 // Run starts the TUI application.

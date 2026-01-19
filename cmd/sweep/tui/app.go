@@ -159,6 +159,13 @@ type ScanDoneMsg struct {
 	Err error
 }
 
+// DaemonFilesMsg is sent when daemon returns all files at once.
+type DaemonFilesMsg struct {
+	Files        []types.FileInfo
+	DirsScanned  int64
+	FilesScanned int64
+}
+
 // LiveFileEventMsg is sent when a live file event is received from the daemon.
 type LiveFileEventMsg struct {
 	Event client.FileEvent
@@ -218,6 +225,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultModel.AddFile(msg.File)
 		// Keep listening for more files
 		return m, m.listenForFiles()
+
+	case DaemonFilesMsg:
+		// Daemon returned all files at once - add them all immediately
+		for _, f := range msg.Files {
+			m.resultModel.AddFile(f)
+		}
+		// Update progress
+		m.scanProgress.DirsScanned = msg.DirsScanned
+		m.scanProgress.FilesScanned = msg.FilesScanned
+		m.scanProgress.CacheHits = msg.FilesScanned
+		m.scanProgress.CacheMisses = 0
+		// Mark scan as done
+		m.scanDone = true
+		m.scanProgress.Scanning = false
+		m.resultModel.metrics = ScanMetrics{
+			DirsScanned:  msg.DirsScanned,
+			FilesScanned: msg.FilesScanned,
+			CacheHits:    msg.FilesScanned,
+			CacheMisses:  0,
+			Elapsed:      time.Since(m.scanProgress.StartTime),
+		}
+		// Start live file watching
+		if !m.options.NoDaemon {
+			return m, m.startLiveWatch()
+		}
+		return m, nil
 
 	case ScanDoneMsg:
 		m.scanDone = true
@@ -368,67 +401,36 @@ func (m Model) renderConfirmDialog() string {
 
 	var dialogContent strings.Builder
 
-	// Warning icon and title
-	warningIcon := "⚠️"
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B")).Render("DELETE FILES")
-	dialogContent.WriteString(fmt.Sprintf("  %s  %s  %s\n", warningIcon, title, warningIcon))
-	dialogContent.WriteString("\n")
-
-	// Stats in a nice format
-	countStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
-	sizeStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
-
-	dialogContent.WriteString(fmt.Sprintf("       Files:  %s\n", countStyle.Render(fmt.Sprintf("%d", selectedCount))))
-	dialogContent.WriteString(fmt.Sprintf("       Size:   %s\n", sizeStyle.Render(types.FormatSize(selectedSize))))
+	// Simple summary line
+	summary := fmt.Sprintf("Delete %d files (%s)?", selectedCount, types.FormatSize(selectedSize))
+	summaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC"))
+	dialogContent.WriteString(summaryStyle.Render(summary))
 	dialogContent.WriteString("\n")
 
 	if m.options.DryRun {
-		dryRunStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFC107")).Italic(true)
-		dialogContent.WriteString(center(dryRunStyle.Render("(Dry run - no files will be deleted)"), 44))
-		dialogContent.WriteString("\n\n")
+		dryRunStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true)
+		dialogContent.WriteString(dryRunStyle.Render("(dry run)"))
+		dialogContent.WriteString("\n")
 	}
 
-	// Question
-	dialogContent.WriteString(center(dialogTextStyle.Render("This action cannot be undone."), 44))
-	dialogContent.WriteString("\n\n")
+	dialogContent.WriteString("\n")
 
-	// Buttons with better styling
-	cancelBtnStyle := lipgloss.NewStyle().
-		Padding(0, 3).
-		Margin(0, 1).
-		Background(lipgloss.Color("#444444")).
-		Foreground(lipgloss.Color("#CCCCCC"))
-
-	deleteBtnStyle := lipgloss.NewStyle().
-		Padding(0, 3).
-		Margin(0, 1).
-		Background(lipgloss.Color("#444444")).
-		Foreground(lipgloss.Color("#CCCCCC"))
-
+	// Simple inline buttons
 	if m.confirmFocused == 0 {
-		cancelBtnStyle = cancelBtnStyle.
-			Background(lipgloss.Color("#666666")).
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Bold(true)
+		dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("[n] Cancel"))
+		dialogContent.WriteString("  ")
+		dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("[y] Delete"))
 	} else {
-		deleteBtnStyle = deleteBtnStyle.
-			Background(lipgloss.Color("#DC3545")).
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Bold(true)
+		dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("[n] Cancel"))
+		dialogContent.WriteString("  ")
+		dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#DC3545")).Bold(true).Render("[y] Delete"))
 	}
 
-	cancelBtn := cancelBtnStyle.Render("Cancel")
-	deleteBtn := deleteBtnStyle.Render("Delete")
-
-	buttons := lipgloss.JoinHorizontal(lipgloss.Center, cancelBtn, "    ", deleteBtn)
-	dialogContent.WriteString(center(buttons, 44))
-
-	// Render dialog box with updated style
+	// Minimal dialog box
 	dialogStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF6B6B")).
-		Padding(1, 2).
-		Width(48)
+		BorderForeground(lipgloss.Color("#555555")).
+		Padding(0, 2)
 
 	dialog := dialogStyle.Render(dialogContent.String())
 
@@ -487,55 +489,27 @@ func (m Model) renderComplete() string {
 	var dialogContent strings.Builder
 
 	deleted := m.deleteProgress - len(m.deleteErrors)
-
-	if len(m.deleteErrors) == 0 {
-		// Success
-		successIcon := "✅"
-		title := lipgloss.NewStyle().Bold(true).Foreground(successColor).Render("COMPLETE")
-		dialogContent.WriteString(fmt.Sprintf("     %s  %s  %s\n", successIcon, title, successIcon))
-	} else {
-		// Partial success
-		warnIcon := "⚠️"
-		title := lipgloss.NewStyle().Bold(true).Foreground(warningColor).Render("COMPLETED WITH ERRORS")
-		dialogContent.WriteString(fmt.Sprintf("  %s  %s  %s\n", warnIcon, title, warnIcon))
-	}
-	dialogContent.WriteString("\n")
-
-	// Stats
-	countStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
-	sizeStyle := lipgloss.NewStyle().Bold(true).Foreground(successColor)
+	sizeStyle := lipgloss.NewStyle().Foreground(successColor)
 
 	if m.options.DryRun {
-		dialogContent.WriteString(fmt.Sprintf("    Would delete:  %s files\n", countStyle.Render(fmt.Sprintf("%d", m.deleteTotal))))
-		dialogContent.WriteString(fmt.Sprintf("    Would free:    %s\n", sizeStyle.Render(types.FormatSize(m.lastFreedSize))))
+		dialogContent.WriteString(fmt.Sprintf("Would free %s (%d files)", sizeStyle.Render(types.FormatSize(m.lastFreedSize)), m.deleteTotal))
 	} else {
-		dialogContent.WriteString(fmt.Sprintf("    Deleted:  %s files\n", countStyle.Render(fmt.Sprintf("%d", deleted))))
-		dialogContent.WriteString(fmt.Sprintf("    Freed:    %s\n", sizeStyle.Render(types.FormatSize(m.lastFreedSize))))
+		dialogContent.WriteString(fmt.Sprintf("Freed %s (%d files)", sizeStyle.Render(types.FormatSize(m.lastFreedSize)), deleted))
 	}
 
 	if len(m.deleteErrors) > 0 {
 		errorStyle := lipgloss.NewStyle().Foreground(dangerColor)
-		dialogContent.WriteString(fmt.Sprintf("    Failed:   %s\n", errorStyle.Render(fmt.Sprintf("%d files", len(m.deleteErrors)))))
+		dialogContent.WriteString(errorStyle.Render(fmt.Sprintf(", %d failed", len(m.deleteErrors))))
 	}
 
-	dialogContent.WriteString("\n")
+	dialogContent.WriteString("\n\n")
+	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("[Enter] Continue  [q] Quit"))
 
-	// Instructions
-	enterKey := keyStyle.Render("[Enter]")
-	qKey := keyStyle.Render("[q]")
-	dialogContent.WriteString(center(enterKey+" "+keyDescStyle.Render("Continue")+"    "+qKey+" "+keyDescStyle.Render("Quit"), 44))
-
-	// Render dialog box
-	borderColor := successColor
-	if len(m.deleteErrors) > 0 {
-		borderColor = warningColor
-	}
-
+	// Minimal dialog box
 	dialogStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(1, 2).
-		Width(48)
+		BorderForeground(lipgloss.Color("#555555")).
+		Padding(0, 2)
 
 	dialog := dialogStyle.Render(dialogContent.String())
 
@@ -601,12 +575,12 @@ func (m Model) startStreamingScan() tea.Cmd {
 	fileChan := m.fileChan
 	progressChan := m.progressChan
 	return func() tea.Msg {
-		// Try daemon first if not disabled
+		// Try daemon first if not disabled - returns all files instantly
 		if !m.options.NoDaemon {
-			if m.tryDaemonStreamingScan(fileChan, progressChan) {
+			if msg := m.tryDaemonInstantLoad(); msg != nil {
 				close(fileChan)
 				close(progressChan)
-				return ScanDoneMsg{}
+				return *msg
 			}
 		}
 
@@ -662,33 +636,33 @@ func (m Model) listenForFiles() tea.Cmd {
 	}
 }
 
-// tryDaemonStreamingScan attempts to get results from the daemon and stream them.
-// Returns true if the daemon was used, false otherwise.
-func (m Model) tryDaemonStreamingScan(fileChan chan types.FileInfo, progressChan chan types.ScanProgress) bool {
+// tryDaemonInstantLoad attempts to get all files from the daemon instantly.
+// Returns a DaemonFilesMsg if successful, nil otherwise.
+func (m Model) tryDaemonInstantLoad() *DaemonFilesMsg {
 	// Check if daemon is running
 	pidPath := client.DefaultPIDPath()
 	if !client.IsDaemonRunning(pidPath) {
-		return false
+		return nil
 	}
 
 	// Try to connect to daemon
 	socketPath := client.DefaultSocketPath()
 	daemonClient, err := client.ConnectWithContext(m.ctx, socketPath)
 	if err != nil {
-		return false
+		return nil
 	}
 	defer daemonClient.Close()
 
 	// Check if index is ready for this path
 	ready, err := daemonClient.IsIndexReady(m.ctx, m.options.Root)
 	if err != nil || !ready {
-		return false
+		return nil
 	}
 
-	// Query the daemon
+	// Query the daemon - get all files at once
 	files, err := daemonClient.GetLargeFiles(m.ctx, m.options.Root, m.options.MinSize, m.options.Exclude, 0)
 	if err != nil {
-		return false
+		return nil
 	}
 
 	// Get index status for statistics
@@ -698,27 +672,12 @@ func (m Model) tryDaemonStreamingScan(fileChan chan types.FileInfo, progressChan
 		filesIndexed = status.FilesIndexed
 	}
 
-	// Send progress
-	select {
-	case progressChan <- types.ScanProgress{
+	// Return all files at once
+	return &DaemonFilesMsg{
+		Files:        files,
 		DirsScanned:  dirsIndexed,
 		FilesScanned: filesIndexed,
-		CacheHits:    filesIndexed,
-		CacheMisses:  0,
-	}:
-	default:
 	}
-
-	// Stream files one at a time (they come sorted from daemon)
-	for _, f := range files {
-		select {
-		case fileChan <- f:
-		case <-m.ctx.Done():
-			return true
-		}
-	}
-
-	return true
 }
 
 // listenForProgress returns a command that waits for progress updates.

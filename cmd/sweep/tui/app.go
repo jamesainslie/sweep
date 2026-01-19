@@ -46,11 +46,12 @@ type Model struct {
 	options     Options
 
 	// Scanning state
-	ctx       context.Context
-	cancel    context.CancelFunc
-	scanDone  bool
-	scanErr   error
-	scanFiles []types.FileInfo
+	ctx          context.Context
+	cancel       context.CancelFunc
+	scanDone     bool
+	scanErr      error
+	scanFiles    []types.FileInfo
+	progressChan chan types.ScanProgress
 
 	// Confirmation dialog state
 	confirmFocused int // 0 = cancel, 1 = delete
@@ -84,6 +85,7 @@ func NewModel(opts Options) Model {
 		height:         24,
 		confirmFocused: 0,
 		deleteSpinner:  s,
+		progressChan:   make(chan types.ScanProgress, 100),
 	}
 }
 
@@ -92,8 +94,19 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.scanModel.Init(),
 		m.startScan(),
-		m.tickProgress(),
+		m.listenForProgress(),
+		m.tickUI(),
 	)
+}
+
+// tickUIMsg triggers a UI refresh.
+type tickUIMsg struct{}
+
+// tickUI returns a command that periodically triggers UI updates.
+func (m Model) tickUI() tea.Cmd {
+	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+		return tickUIMsg{}
+	})
 }
 
 // Update handles messages.
@@ -112,9 +125,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case tickUIMsg:
+		// Keep UI refreshing during scanning
+		if m.state == StateScanning && !m.scanDone {
+			return m, m.tickUI()
+		}
+		return m, nil
+
 	case ProgressMsg:
 		m.scanModel.SetProgress(types.ScanProgress(msg))
-		return m, nil
+		// Keep listening for more progress
+		return m, m.listenForProgress()
 
 	case ScanCompleteMsg:
 		m.scanDone = true
@@ -123,16 +144,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanModel.SetDone(msg.Err)
 
 		if msg.Err == nil {
-			// Transition to results
+			// Transition to results with metrics
 			m.state = StateResults
-			m.resultModel = NewResultModel(msg.Files)
+			metrics := ScanMetrics{
+				DirsScanned:  msg.DirsScanned,
+				FilesScanned: msg.FilesScanned,
+				CacheHits:    msg.CacheHits,
+				CacheMisses:  msg.CacheMisses,
+				Elapsed:      msg.Elapsed,
+			}
+			m.resultModel = NewResultModelWithMetrics(msg.Files, metrics)
 			m.resultModel.SetDimensions(m.width, m.height)
-		}
-		return m, nil
-
-	case progressTickMsg:
-		if m.state == StateScanning && !m.scanDone {
-			return m, m.tickProgress()
 		}
 		return m, nil
 
@@ -427,6 +449,7 @@ func (m Model) overlayDialog(bg, dialog string) string {
 
 // startScan starts the scanning process.
 func (m Model) startScan() tea.Cmd {
+	progressChan := m.progressChan
 	return func() tea.Msg {
 		opts := scanner.Options{
 			Root:        m.options.Root,
@@ -434,12 +457,21 @@ func (m Model) startScan() tea.Cmd {
 			Exclude:     m.options.Exclude,
 			DirWorkers:  m.options.DirWorkers,
 			FileWorkers: m.options.FileWorkers,
-			OnProgress:  nil, // Will be set separately
-			Cache:       m.options.Cache,
+			OnProgress: func(p types.ScanProgress) {
+				select {
+				case progressChan <- p:
+				default:
+					// Channel full, skip this update
+				}
+			},
+			Cache: m.options.Cache,
 		}
 
 		s := scanner.New(opts)
 		result, err := s.Scan(m.ctx)
+
+		// Close progress channel when scan completes
+		close(progressChan)
 
 		if err != nil {
 			return ScanCompleteMsg{Err: err}
@@ -451,18 +483,28 @@ func (m Model) startScan() tea.Cmd {
 			return files[i].Size > files[j].Size
 		})
 
-		return ScanCompleteMsg{Files: files}
+		return ScanCompleteMsg{
+			Files:        files,
+			DirsScanned:  result.DirsScanned,
+			FilesScanned: result.FilesScanned,
+			CacheHits:    result.CacheHits,
+			CacheMisses:  result.CacheMisses,
+			Elapsed:      result.Elapsed,
+		}
 	}
 }
 
-// progressTickMsg is sent periodically to update progress display.
-type progressTickMsg struct{}
-
-// tickProgress returns a command that ticks progress updates.
-func (m Model) tickProgress() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-		return progressTickMsg{}
-	})
+// listenForProgress returns a command that waits for progress updates.
+func (m Model) listenForProgress() tea.Cmd {
+	progressChan := m.progressChan
+	return func() tea.Msg {
+		p, ok := <-progressChan
+		if !ok {
+			// Channel closed, scan is done
+			return nil
+		}
+		return ProgressMsg(p)
+	}
 }
 
 // deleteProgressMsg reports deletion progress.

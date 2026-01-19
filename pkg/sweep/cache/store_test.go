@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func TestStoreGetNotFound(t *testing.T) {
 	defer store.Close()
 
 	_, err = store.Get("/nonexistent", "path")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestStoreDelete(t *testing.T) {
 	}
 
 	_, err = store.Get(root, "file.txt")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 }

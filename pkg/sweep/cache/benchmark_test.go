@@ -12,23 +12,30 @@ import (
 
 func createBenchTree(b *testing.B, numFiles int) string {
 	b.Helper()
-	root, _ := os.MkdirTemp("", "bench-*")
+	root, err := os.MkdirTemp("", "bench-*")
+	if err != nil {
+		b.Fatalf("failed to create temp dir: %v", err)
+	}
 
 	// Create files distributed across directories
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		dir := filepath.Join(root, "dir"+string(rune('a'+i%26)))
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			b.Fatalf("failed to create dir: %v", err)
+		}
 
 		size := 100 // small
 		if i%10 == 0 {
 			size = 10 * 1024 // large (10KB)
 		}
 
-		os.WriteFile(
+		if err := os.WriteFile(
 			filepath.Join(dir, "file"+string(rune('0'+i%10))+".txt"),
 			make([]byte, size),
 			0644,
-		)
+		); err != nil {
+			b.Fatalf("failed to write file: %v", err)
+		}
 	}
 
 	return root
@@ -39,13 +46,15 @@ func BenchmarkScanCold(b *testing.B) {
 	defer os.RemoveAll(root)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
 			Cache:   nil, // No cache
 		})
-		s.Scan(context.Background())
+		if _, err := s.Scan(context.Background()); err != nil {
+			b.Fatalf("scan failed: %v", err)
+		}
 	}
 }
 
@@ -53,10 +62,16 @@ func BenchmarkScanWarm(b *testing.B) {
 	root := createBenchTree(b, 1000)
 	defer os.RemoveAll(root)
 
-	cacheDir, _ := os.MkdirTemp("", "cache-bench-*")
+	cacheDir, err := os.MkdirTemp("", "cache-bench-*")
+	if err != nil {
+		b.Fatalf("failed to create cache dir: %v", err)
+	}
 	defer os.RemoveAll(cacheDir)
 
-	c, _ := cache.Open(filepath.Join(cacheDir, "cache"))
+	c, err := cache.Open(filepath.Join(cacheDir, "cache"))
+	if err != nil {
+		b.Fatalf("failed to open cache: %v", err)
+	}
 	defer c.Close()
 
 	// Warm up cache with first scan
@@ -65,16 +80,20 @@ func BenchmarkScanWarm(b *testing.B) {
 		MinSize: 1024,
 		Cache:   c,
 	})
-	s.Scan(context.Background())
+	if _, err := s.Scan(context.Background()); err != nil {
+		b.Fatalf("warmup scan failed: %v", err)
+	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
 			Cache:   c,
 		})
-		s.Scan(context.Background())
+		if _, err := s.Scan(context.Background()); err != nil {
+			b.Fatalf("scan failed: %v", err)
+		}
 	}
 }
 
@@ -83,13 +102,15 @@ func BenchmarkScanCold_Large(b *testing.B) {
 	defer os.RemoveAll(root)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
 			Cache:   nil,
 		})
-		s.Scan(context.Background())
+		if _, err := s.Scan(context.Background()); err != nil {
+			b.Fatalf("scan failed: %v", err)
+		}
 	}
 }
 
@@ -97,10 +118,16 @@ func BenchmarkScanWarm_Large(b *testing.B) {
 	root := createBenchTree(b, 5000)
 	defer os.RemoveAll(root)
 
-	cacheDir, _ := os.MkdirTemp("", "cache-bench-*")
+	cacheDir, err := os.MkdirTemp("", "cache-bench-*")
+	if err != nil {
+		b.Fatalf("failed to create cache dir: %v", err)
+	}
 	defer os.RemoveAll(cacheDir)
 
-	c, _ := cache.Open(filepath.Join(cacheDir, "cache"))
+	c, err := cache.Open(filepath.Join(cacheDir, "cache"))
+	if err != nil {
+		b.Fatalf("failed to open cache: %v", err)
+	}
 	defer c.Close()
 
 	// Warm up cache
@@ -109,15 +136,19 @@ func BenchmarkScanWarm_Large(b *testing.B) {
 		MinSize: 1024,
 		Cache:   c,
 	})
-	s.Scan(context.Background())
+	if _, err := s.Scan(context.Background()); err != nil {
+		b.Fatalf("warmup scan failed: %v", err)
+	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
 			Cache:   c,
 		})
-		s.Scan(context.Background())
+		if _, err := s.Scan(context.Background()); err != nil {
+			b.Fatalf("scan failed: %v", err)
+		}
 	}
 }

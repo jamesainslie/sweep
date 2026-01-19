@@ -31,8 +31,13 @@ type ProgressMsg types.ScanProgress
 
 // ScanCompleteMsg is sent when the scan is complete.
 type ScanCompleteMsg struct {
-	Files []types.FileInfo
-	Err   error
+	Files        []types.FileInfo
+	Err          error
+	DirsScanned  int64
+	FilesScanned int64
+	CacheHits    int64
+	CacheMisses  int64
+	Elapsed      time.Duration
 }
 
 // NewScanModel creates a new scanning model.
@@ -93,6 +98,9 @@ func (m ScanModel) View() string {
 		contentWidth = 40
 	}
 
+	// Add top margin for visual spacing
+	b.WriteString("\n")
+
 	// Header
 	header := m.renderHeader(contentWidth)
 	b.WriteString(header)
@@ -124,9 +132,19 @@ func (m ScanModel) View() string {
 	b.WriteString(m.renderStats(contentWidth))
 	b.WriteString("\n")
 
-	// Wrap in outer box
+	// Build content and calculate padding needed to fill screen
 	content := b.String()
-	return outerBoxStyle.Width(m.width - 2).Render(content)
+	contentLines := strings.Count(content, "\n") + 1
+
+	// Account for outer box border (2 lines: top and bottom)
+	availableLines := m.height - 2
+	if availableLines > contentLines {
+		padding := availableLines - contentLines
+		content += strings.Repeat("\n", padding)
+	}
+
+	// Wrap in outer box with full height
+	return outerBoxStyle.Width(m.width - 2).Height(m.height - 2).Render(content)
 }
 
 // renderHeader renders the header section.
@@ -184,10 +202,10 @@ func (m ScanModel) renderProgressBar(width int) string {
 
 // renderStats renders the statistics boxes.
 func (m ScanModel) renderStats(totalWidth int) string {
-	// Calculate box width (4 boxes with spacing)
-	boxWidth := (totalWidth - 10) / 4
-	if boxWidth < 12 {
-		boxWidth = 12
+	// Calculate box width (5 boxes with spacing)
+	boxWidth := (totalWidth - 12) / 5
+	if boxWidth < 10 {
+		boxWidth = 10
 	}
 
 	// Format values
@@ -197,15 +215,27 @@ func (m ScanModel) renderStats(totalWidth int) string {
 	elapsed := time.Since(m.startTime)
 	elapsedVal := formatDuration(elapsed)
 
+	// Cache stats
+	cacheHits := m.progress.CacheHits
+	cacheMisses := m.progress.CacheMisses
+	var cacheVal string
+	if cacheHits+cacheMisses > 0 {
+		hitRate := float64(cacheHits) / float64(cacheHits+cacheMisses) * 100
+		cacheVal = fmt.Sprintf("%.0f%%", hitRate)
+	} else {
+		cacheVal = "-"
+	}
+
 	// Create stats boxes
 	dirsBox := m.renderStatBox("Dirs", dirsVal, boxWidth)
 	filesBox := m.renderStatBox("Files", filesVal, boxWidth)
-	largeBox := m.renderStatBox("Large Files", largeVal, boxWidth)
-	elapsedBox := m.renderStatBox("Elapsed", elapsedVal, boxWidth)
+	largeBox := m.renderStatBox("Large", largeVal, boxWidth)
+	cacheBox := m.renderStatBox("Cache", cacheVal, boxWidth)
+	elapsedBox := m.renderStatBox("Time", elapsedVal, boxWidth)
 
 	// Join horizontally
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		"  ", dirsBox, " ", filesBox, " ", largeBox, " ", elapsedBox)
+		"  ", dirsBox, " ", filesBox, " ", largeBox, " ", cacheBox, " ", elapsedBox)
 }
 
 // renderStatBox renders a single stat box.

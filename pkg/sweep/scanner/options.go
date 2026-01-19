@@ -1,6 +1,6 @@
 // Package scanner provides high-performance parallel directory scanning
-// for the sweep disk analyzer. It uses a dual worker pool architecture
-// with bounded channels and atomic counters for maximum throughput.
+// for the sweep disk analyzer. It uses fastwalk for maximum throughput
+// with optional metadata caching for near-instant repeat scans.
 package scanner
 
 import (

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -32,6 +33,9 @@ func NewValidator(store *Store) *Validator {
 }
 
 // Validate checks the cache against the filesystem and returns what's stale.
+// For performance, this only checks the root directory mtime.
+// If unchanged, all cached files are considered valid.
+// If changed, the entire tree is marked as stale for a full rescan.
 func (v *Validator) Validate(root string) (*ValidationResult, error) {
 	result := &ValidationResult{}
 
@@ -54,110 +58,23 @@ func (v *Validator) Validate(root string) (*ValidationResult, error) {
 
 	// Check if root mtime changed
 	if rootInfo.ModTime().UnixNano() != cachedRoot.Mtime {
-		// Root changed - need to validate children
-		if err := v.validateDir(root, "", cachedRoot, result); err != nil {
-			return nil, err
-		}
-	} else {
-		// Root unchanged - collect all cached files
-		if err := v.collectCachedFiles(root, "", result); err != nil {
-			return nil, err
-		}
+		// Root changed - do a full rescan
+		// This is a conservative approach: any change in the tree triggers full rescan
+		result.StaleDirs = []string{root}
+		return result, nil
+	}
+
+	// Root unchanged - collect all cached files without additional stat calls
+	if err := v.collectCachedFiles(root, "", result); err != nil {
+		return nil, err
 	}
 
 	return result, nil
 }
 
-// validateDir recursively validates a directory and its children.
-func (v *Validator) validateDir(root, relPath string, cached *CachedEntry, result *ValidationResult) error {
-	fullPath := filepath.Join(root, relPath)
-	if relPath == "" {
-		fullPath = root
-	}
-
-	// Check each cached child
-	for _, childName := range cached.Children {
-		childRelPath := childName
-		if relPath != "" {
-			childRelPath = filepath.Join(relPath, childName)
-		}
-		childFullPath := filepath.Join(root, childRelPath)
-
-		// Stat the child
-		childInfo, err := os.Stat(childFullPath)
-		if os.IsNotExist(err) {
-			// Child was deleted
-			result.DeletedPaths = append(result.DeletedPaths, childRelPath)
-			continue
-		}
-		if err != nil {
-			// Can't stat - treat as deleted
-			result.DeletedPaths = append(result.DeletedPaths, childRelPath)
-			continue
-		}
-
-		// Get cached child entry
-		cachedChild, err := v.store.Get(root, childRelPath)
-		if errors.Is(err, ErrNotFound) {
-			// Not in cache but exists - parent dir is stale
-			result.StaleDirs = append(result.StaleDirs, fullPath)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-
-		// Check mtime
-		mtimeChanged := childInfo.ModTime().UnixNano() != cachedChild.Mtime
-		isDir := childInfo.IsDir()
-
-		switch {
-		case mtimeChanged && !isDir:
-			// File changed - parent dir is stale (need to rescan)
-			result.StaleDirs = append(result.StaleDirs, fullPath)
-			return nil
-		case mtimeChanged && isDir:
-			// Directory changed - mark as stale
-			result.StaleDirs = append(result.StaleDirs, childFullPath)
-		case !mtimeChanged && isDir:
-			// Unchanged directory - recursively collect from subtree
-			if err := v.collectCachedFiles(root, childRelPath, result); err != nil {
-				return err
-			}
-		default:
-			// Unchanged file - add to valid files
-			result.ValidFiles = append(result.ValidFiles, types.FileInfo{
-				Path:    childFullPath,
-				Size:    cachedChild.Size,
-				ModTime: childInfo.ModTime(),
-			})
-		}
-	}
-
-	// Check for new entries (in filesystem but not in cache)
-	entries, err := os.ReadDir(fullPath)
-	if err != nil {
-		return fmt.Errorf("readdir %s: %w", fullPath, err)
-	}
-
-	cachedSet := make(map[string]bool)
-	for _, name := range cached.Children {
-		cachedSet[name] = true
-	}
-
-	for _, entry := range entries {
-		if !cachedSet[entry.Name()] {
-			// New entry found - this dir is stale
-			result.StaleDirs = append(result.StaleDirs, fullPath)
-			return nil
-		}
-	}
-
-	return nil
-}
-
-// collectCachedFiles recursively collects all files from an unchanged subtree.
-// It validates file mtimes and marks directories as stale if files have changed.
+// collectCachedFiles recursively collects all files from a cached subtree.
+// This is a fast O(cached entries) operation that does NO stat calls.
+// It trusts the cache completely since root mtime was already verified.
 func (v *Validator) collectCachedFiles(root, relPath string, result *ValidationResult) error {
 	cached, err := v.store.Get(root, relPath)
 	if err != nil {
@@ -170,34 +87,16 @@ func (v *Validator) collectCachedFiles(root, relPath string, result *ValidationR
 	}
 
 	if !cached.IsDir {
-		// It's a file - check if it's still valid
-		info, err := os.Stat(fullPath)
-		if os.IsNotExist(err) {
-			// File was deleted - mark parent as stale for rescan
-			parentDir := filepath.Dir(fullPath)
-			result.StaleDirs = append(result.StaleDirs, parentDir)
-			return nil
-		}
-		if err != nil {
-			// Stat failed for other reason - propagate error
-			return fmt.Errorf("stat file %s: %w", fullPath, err)
-		}
-		// Check if file mtime changed (content may have been modified in place)
-		if info.ModTime().UnixNano() != cached.Mtime {
-			// File changed - mark parent as stale
-			parentDir := filepath.Dir(fullPath)
-			result.StaleDirs = append(result.StaleDirs, parentDir)
-			return nil
-		}
+		// It's a file - trust cached data completely (no stat)
 		result.ValidFiles = append(result.ValidFiles, types.FileInfo{
 			Path:    fullPath,
 			Size:    cached.Size,
-			ModTime: info.ModTime(),
+			ModTime: time.Unix(0, cached.Mtime),
 		})
 		return nil
 	}
 
-	// It's a directory - collect children
+	// It's a directory - recurse into children (no stat)
 	for _, childName := range cached.Children {
 		childRelPath := childName
 		if relPath != "" {

@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -283,7 +284,7 @@ func TestScanContextCancellation(t *testing.T) {
 	result, err := scanner.Scan(ctx)
 
 	// Should complete (possibly with partial results) without hanging.
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -305,7 +306,7 @@ func TestScanProgress(t *testing.T) {
 		MinSize:     1,
 		DirWorkers:  1,
 		FileWorkers: 1,
-		OnProgress: func(p types.ScanProgress) {
+		OnProgress: func(_ types.ScanProgress) {
 			progressCalls.Add(1)
 		},
 	}

@@ -46,9 +46,7 @@ func (s *Store) Get(root, relPath string) (*CachedEntry, error) {
 			return err
 		}
 
-		return item.Value(func(val []byte) error {
-			return entry.Decode(val)
-		})
+		return item.Value(entry.Decode)
 	})
 
 	if err != nil {

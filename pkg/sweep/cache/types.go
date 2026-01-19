@@ -34,7 +34,7 @@ func (e *CachedEntry) Decode(data []byte) error {
 }
 
 // MakeKey creates a cache key from root and relative path.
-// Format: <root>\x00<relative_path>
+// Format: <root>\x00<relative_path>.
 func MakeKey(root, relPath string) []byte {
 	if relPath == "" {
 		return []byte(root + string(KeySeparator))

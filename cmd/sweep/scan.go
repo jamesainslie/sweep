@@ -172,6 +172,8 @@ type scanResult struct {
 	FilesScanned int64            `json:"files_scanned"`
 	TotalSize    int64            `json:"total_size"`
 	Elapsed      time.Duration    `json:"elapsed"`
+	CacheHits    int64            `json:"cache_hits"`
+	CacheMisses  int64            `json:"cache_misses"`
 	Errors       []scanError      `json:"errors,omitempty"`
 }
 
@@ -355,6 +357,8 @@ func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*
 		DirsScanned:  scanRes.DirsScanned,
 		FilesScanned: scanRes.FilesScanned,
 		TotalSize:    scanRes.TotalSize,
+		CacheHits:    scanRes.CacheHits,
+		CacheMisses:  scanRes.CacheMisses,
 		Errors:       make([]scanError, len(scanRes.Errors)),
 	}
 
@@ -386,6 +390,13 @@ func outputTable(result *scanResult) error {
 		printInfo("No files found matching criteria.")
 		printInfo("\nScanned %d directories, %d files in %v",
 			result.DirsScanned, result.FilesScanned, result.Elapsed.Round(time.Millisecond))
+		// Print cache metrics if available
+		totalCacheOps := result.CacheHits + result.CacheMisses
+		if totalCacheOps > 0 {
+			hitRate := float64(result.CacheHits) / float64(totalCacheOps) * 100
+			printInfo("Cache: %d hits, %d misses (%.1f%% hit rate)",
+				result.CacheHits, result.CacheMisses, hitRate)
+		}
 		return nil
 	}
 
@@ -414,6 +425,14 @@ func outputTable(result *scanResult) error {
 		len(result.Files), types.FormatSize(result.TotalSize))
 	fmt.Printf("Scanned %d directories, %d files in %v\n",
 		result.DirsScanned, result.FilesScanned, result.Elapsed.Round(time.Millisecond))
+
+	// Print cache metrics if available
+	totalCacheOps := result.CacheHits + result.CacheMisses
+	if totalCacheOps > 0 {
+		hitRate := float64(result.CacheHits) / float64(totalCacheOps) * 100
+		fmt.Printf("Cache: %d hits, %d misses (%.1f%% hit rate)\n",
+			result.CacheHits, result.CacheMisses, hitRate)
+	}
 
 	if len(result.Errors) > 0 {
 		fmt.Printf("\n%d errors encountered during scan (use --verbose for details)\n", len(result.Errors))

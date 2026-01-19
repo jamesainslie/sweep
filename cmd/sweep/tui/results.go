@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
@@ -33,12 +32,11 @@ type ResultModel struct {
 	width    int
 	height   int
 	metrics  ScanMetrics
-	table    table.Model
 }
 
 // NewResultModel creates a new result model with the given files.
 func NewResultModel(files []types.FileInfo) ResultModel {
-	m := ResultModel{
+	return ResultModel{
 		files:    files,
 		cursor:   0,
 		selected: make(map[int]bool),
@@ -46,13 +44,11 @@ func NewResultModel(files []types.FileInfo) ResultModel {
 		width:    80,
 		height:   24,
 	}
-	m.table = m.createTable()
-	return m
 }
 
 // NewResultModelWithMetrics creates a new result model with files and scan metrics.
 func NewResultModelWithMetrics(files []types.FileInfo, metrics ScanMetrics) ResultModel {
-	m := ResultModel{
+	return ResultModel{
 		files:    files,
 		cursor:   0,
 		selected: make(map[int]bool),
@@ -61,8 +57,6 @@ func NewResultModelWithMetrics(files []types.FileInfo, metrics ScanMetrics) Resu
 		height:   24,
 		metrics:  metrics,
 	}
-	m.table = m.createTable()
-	return m
 }
 
 // Init initializes the result model.
@@ -84,32 +78,58 @@ func (m ResultModel) Update(msg tea.Msg) (ResultModel, tea.Cmd) {
 
 // HandleKey handles key input for the result model.
 func (m *ResultModel) HandleKey(key string) tea.Cmd {
-	// Handle selection keys ourselves
 	switch key {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			m.ensureVisible()
+		}
+	case "down", "j":
+		if m.cursor < len(m.files)-1 {
+			m.cursor++
+			m.ensureVisible()
+		}
 	case " ":
 		m.Toggle(m.cursor)
-		m.updateTable()
-		return nil
-
 	case "a":
 		m.SelectAll()
-		m.updateTable()
-		return nil
-
 	case "n":
 		m.SelectNone()
-		m.updateTable()
-		return nil
+	case "home", "g":
+		m.cursor = 0
+		m.offset = 0
+	case "end", "G":
+		if len(m.files) > 0 {
+			m.cursor = len(m.files) - 1
+			m.ensureVisible()
+		}
+	case "pgup":
+		m.cursor -= m.visibleRows()
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.ensureVisible()
+	case "pgdown":
+		m.cursor += m.visibleRows()
+		if m.cursor >= len(m.files) {
+			m.cursor = len(m.files) - 1
+		}
+		m.ensureVisible()
 	}
+	return nil
+}
 
-	// Pass navigation keys through the table's Update method
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
-
-	// Sync our cursor with the table's cursor
-	m.cursor = m.table.Cursor()
-
-	return cmd
+// ensureVisible adjusts offset to keep cursor visible.
+func (m *ResultModel) ensureVisible() {
+	visible := m.visibleRows()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	} else if m.cursor >= m.offset+visible {
+		m.offset = m.cursor - visible + 1
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
 }
 
 // View renders the result model.
@@ -254,110 +274,88 @@ func (m ResultModel) renderHelpBar(width int) string {
 	return "  " + strings.Join(parts, "  ")
 }
 
-// createTable creates and configures the file table.
-func (m ResultModel) createTable() table.Model {
-	// Use full terminal width for the table
-	tableWidth := m.width - 4 // Account for outer box padding
-	if tableWidth < 60 {
-		tableWidth = 60
-	}
+// Styles for file list rendering.
+var (
+	// Row highlight style - warm orange background spanning full width
+	rowHighlightStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#663300")).
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Bold(true)
 
-	// Layout: checkbox (3) + size (10) + filename (rest)
-	filenameWidth := tableWidth - 17
-	if filenameWidth < 20 {
-		filenameWidth = 20
-	}
+	// Normal row style
+	rowNormalStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#CCCCCC"))
 
-	columns := []table.Column{
-		{Title: "", Width: 3},                 // Checkbox
-		{Title: "Size", Width: 10},            // Size
-		{Title: "File", Width: filenameWidth}, // Filename
-	}
+	// Checkbox styles
+	checkboxChecked   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("✓")
+	checkboxUnchecked = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○")
 
-	rows := m.buildTableRows(filenameWidth)
+	// Size style
+	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)
+)
 
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(true),
-		table.WithHeight(m.visibleRows()),
-		table.WithWidth(tableWidth),
-	)
+// renderFileList renders the scrollable file list with full-width highlighting.
+func (m ResultModel) renderFileList(width int) string {
+	var b strings.Builder
 
-	// Style the table with warm orange highlight for selected row
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(borderColor).
-		BorderBottom(true).
-		Bold(true).
-		Foreground(primaryColor)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Background(lipgloss.Color("#804000")). // Warm burnt orange - visible but not harsh
-		Bold(true)
-	s.Cell = s.Cell.
-		Foreground(lipgloss.Color("#AAAAAA"))
-	t.SetStyles(s)
+	// Header row
+	header := fmt.Sprintf("   %s  %s", padLeft("Size", 10), "File")
+	b.WriteString(mutedTextStyle.Render(header))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(width))
+	b.WriteString("\n")
 
-	// Configure key bindings for vim-style navigation
-	t.KeyMap.LineUp.SetKeys("up", "k")
-	t.KeyMap.LineDown.SetKeys("down", "j")
-	t.KeyMap.GotoTop.SetKeys("home", "g")
-	t.KeyMap.GotoBottom.SetKeys("end", "G")
-	t.KeyMap.PageUp.SetKeys("pgup")
-	t.KeyMap.PageDown.SetKeys("pgdown")
+	visible := m.visibleRows()
+	for i := m.offset; i < m.offset+visible && i < len(m.files); i++ {
+		file := m.files[i]
+		isCursor := i == m.cursor
+		isSelected := m.selected[i]
 
-	return t
-}
-
-// buildTableRows converts files to table rows.
-func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
-	rows := make([]table.Row, len(m.files))
-	for i, file := range m.files {
-		// Use plain Unicode symbols - table styling handles colors
-		checkbox := " ○"
-		if m.selected[i] {
-			checkbox = " ✓"
+		// Build the row content
+		var checkbox string
+		if isSelected {
+			checkbox = checkboxChecked
+		} else {
+			checkbox = checkboxUnchecked
 		}
 
-		// Size (right-aligned within column)
-		size := padLeft(types.FormatSize(file.Size), 9)
-
-		// Filename truncated to fit
+		size := sizeStyle.Render(types.FormatSize(file.Size))
 		filename := filepath.Base(file.Path)
+
+		// Calculate available width for filename
+		// Layout: " " + checkbox + " " + size + "  " + filename
+		filenameWidth := width - 16
+		if filenameWidth < 20 {
+			filenameWidth = 20
+		}
 		if len(filename) > filenameWidth {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		rows[i] = table.Row{checkbox, size, filename}
-	}
-	return rows
-}
+		// Build the row - pad to full width
+		row := fmt.Sprintf(" %s  %s  %s", checkbox, size, filename)
+		rowLen := lipgloss.Width(row)
+		if rowLen < width {
+			row = row + strings.Repeat(" ", width-rowLen)
+		}
 
-// updateTable refreshes the table with current data.
-func (m *ResultModel) updateTable() {
-	tableWidth := m.width - 4
-	if tableWidth < 60 {
-		tableWidth = 60
+		// Apply styling based on cursor position
+		if isCursor {
+			b.WriteString(rowHighlightStyle.Render(row))
+		} else {
+			b.WriteString(rowNormalStyle.Render(row))
+		}
+		b.WriteString("\n")
 	}
-	filenameWidth := tableWidth - 17
-	if filenameWidth < 20 {
-		filenameWidth = 20
+
+	// Pad remaining rows
+	rendered := m.offset + visible
+	if rendered > len(m.files) {
+		rendered = len(m.files)
 	}
-	rows := m.buildTableRows(filenameWidth)
-	m.table.SetRows(rows)
-	m.table.SetCursor(m.cursor)
-}
-
-// renderFileList renders the file table with a detail panel below.
-func (m ResultModel) renderFileList(width int) string {
-	var b strings.Builder
-
-	// Render the table
-	tableView := m.table.View()
-	b.WriteString(tableView)
-	b.WriteString("\n")
+	for i := rendered - m.offset; i < visible; i++ {
+		b.WriteString("\n")
+	}
 
 	// Detail panel for selected file
 	if m.cursor >= 0 && m.cursor < len(m.files) {
@@ -516,12 +514,10 @@ func (m ResultModel) HasSelection() bool {
 	return len(m.selected) > 0
 }
 
-// SetDimensions updates the width and height and rebuilds the table.
+// SetDimensions updates the width and height.
 func (m *ResultModel) SetDimensions(width, height int) {
 	m.width = width
 	m.height = height
-	m.table = m.createTable()
-	m.table.SetCursor(m.cursor)
 }
 
 // AddFile inserts a file in sorted position (by size descending).
@@ -554,9 +550,6 @@ func (m *ResultModel) AddFile(file types.FileInfo) {
 	if m.cursor >= idx {
 		m.cursor++
 	}
-
-	// Update table with new data
-	m.updateTable()
 }
 
 // UpdateFile updates a file's size and mod time, re-sorting if needed.
@@ -662,9 +655,6 @@ func (m *ResultModel) removeFileAtIndex(idx int) {
 	} else if m.cursor == idx && m.cursor >= len(m.files) && len(m.files) > 0 {
 		m.cursor = len(m.files) - 1
 	}
-
-	// Update table with new data
-	m.updateTable()
 }
 
 // ViewWithProgress renders the results with scan progress information in the footer.

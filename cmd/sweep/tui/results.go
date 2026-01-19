@@ -280,7 +280,7 @@ func (m ResultModel) createTable() table.Model {
 		table.WithWidth(contentWidth),
 	)
 
-	// Style the table
+	// Style the table with subtle orange glow for selected row
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -290,7 +290,7 @@ func (m ResultModel) createTable() table.Model {
 		Foreground(primaryColor)
 	s.Selected = s.Selected.
 		Foreground(lipgloss.Color("#FFFFFF")).
-		Background(highlightColor).
+		Background(lipgloss.Color("#3D2800")). // Subtle dark orange/amber glow
 		Bold(true)
 	s.Cell = s.Cell.
 		Foreground(lipgloss.Color("#CCCCCC"))
@@ -307,14 +307,20 @@ func (m ResultModel) createTable() table.Model {
 	return t
 }
 
+// Checkbox styles for the table.
+var (
+	checkedIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("#28A745")).Bold(true).Render("✔")
+	uncheckedIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○")
+)
+
 // buildTableRows converts files to table rows.
 func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
 	rows := make([]table.Row, len(m.files))
 	for i, file := range m.files {
-		// Checkbox
-		checkbox := "[ ]"
+		// Checkbox with styled icon
+		checkbox := " " + uncheckedIcon + " "
 		if m.selected[i] {
-			checkbox = "[x]"
+			checkbox = " " + checkedIcon + " "
 		}
 
 		// Size (right-aligned within column)

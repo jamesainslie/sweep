@@ -15,10 +15,9 @@ var (
 	dangerColor  = lipgloss.Color("#DC3545")
 
 	// Neutral colors
-	mutedColor     = lipgloss.Color("#666666")
-	subtleColor    = lipgloss.Color("#444444")
-	borderColor    = lipgloss.Color("#333333")
-	highlightColor = lipgloss.Color("#1A1A2E")
+	mutedColor  = lipgloss.Color("#666666")
+	subtleColor = lipgloss.Color("#444444")
+	borderColor = lipgloss.Color("#333333")
 )
 
 // Box styles for containers.

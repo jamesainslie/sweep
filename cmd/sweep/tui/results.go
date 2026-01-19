@@ -334,18 +334,15 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Build the row - checkbox centered in 3-char column, pad to full width
+		// Build the row - checkbox centered in 3-char column
 		row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
-		rowLen := lipgloss.Width(row)
-		if rowLen < width {
-			row = row + strings.Repeat(" ", width-rowLen)
-		}
 
 		// Apply styling based on cursor position
+		// Use Width() on style to force full-width background
 		if isCursor {
-			b.WriteString(rowHighlightStyle.Render(row))
+			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
-			b.WriteString(rowNormalStyle.Render(row))
+			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")
 	}

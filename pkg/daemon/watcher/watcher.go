@@ -9,16 +9,18 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 )
 
 // Watcher watches directories for filesystem changes and updates the store.
 type Watcher struct {
-	store   *store.Store
-	watcher *fsnotify.Watcher
-	paths   map[string]bool
-	mu      sync.RWMutex
-	closed  bool
+	store       *store.Store
+	watcher     *fsnotify.Watcher
+	paths       map[string]bool
+	mu          sync.RWMutex
+	closed      bool
+	broadcaster *broadcaster.Broadcaster
 }
 
 // New creates a new Watcher.
@@ -204,6 +206,11 @@ func (w *Watcher) handleCreate(path string) {
 	}
 
 	_ = w.store.Put(entry)
+
+	// Notify broadcaster for files (not directories)
+	if w.broadcaster != nil && !info.IsDir() {
+		w.broadcaster.Notify(path, broadcaster.EventCreated, info.Size())
+	}
 }
 
 // handleWrite handles file modification events.
@@ -222,10 +229,20 @@ func (w *Watcher) handleWrite(path string) {
 	}
 
 	_ = w.store.Put(entry)
+
+	// Notify broadcaster for files (not directories)
+	if w.broadcaster != nil && !info.IsDir() {
+		w.broadcaster.Notify(path, broadcaster.EventModified, info.Size())
+	}
 }
 
 // handleRemove handles file/directory deletion events.
 func (w *Watcher) handleRemove(path string) {
+	// Notify broadcaster before cleanup (size 0 for deletions)
+	if w.broadcaster != nil {
+		w.broadcaster.Notify(path, broadcaster.EventDeleted, 0)
+	}
+
 	// Remove watch if it was a directory
 	w.mu.Lock()
 	if w.paths[path] {
@@ -258,6 +275,11 @@ func (w *Watcher) Close() error {
 	w.closed = true
 	w.paths = make(map[string]bool)
 	return w.watcher.Close()
+}
+
+// SetBroadcaster sets the broadcaster for file event notifications.
+func (w *Watcher) SetBroadcaster(b *broadcaster.Broadcaster) {
+	w.broadcaster = b
 }
 
 // isSubPath checks if path is under parent directory.

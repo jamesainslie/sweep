@@ -49,6 +49,17 @@ func NewService(s *store.Store) *Service {
 	}
 }
 
+// NewServiceWithBroadcaster creates a new gRPC service with a broadcaster.
+func NewServiceWithBroadcaster(s *store.Store, b *broadcaster.Broadcaster) *Service {
+	return &Service{
+		store:       s,
+		indexer:     indexer.New(s),
+		broadcaster: b,
+		startTime:   time.Now(),
+		indexStates: make(map[string]*indexState),
+	}
+}
+
 // GetLargeFiles streams large files matching the criteria.
 func (s *Service) GetLargeFiles(req *sweepv1.GetLargeFilesRequest, stream grpc.ServerStreamingServer[sweepv1.FileInfo]) error {
 	limit := int(req.GetLimit())

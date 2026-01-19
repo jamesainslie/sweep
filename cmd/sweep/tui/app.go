@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -519,55 +520,37 @@ func (m Model) renderComplete() string {
 
 // overlayDialog centers a dialog over a background view.
 func (m Model) overlayDialog(bg, dialog string) string {
-	// For simplicity, just replace the view with dialog centered
-	// In a real implementation, you'd composite them
-
 	dialogLines := strings.Split(dialog, "\n")
-	bgLines := strings.Split(bg, "\n")
 
-	// Calculate vertical position
+	// Calculate dialog dimensions
 	dialogHeight := len(dialogLines)
+	dialogWidth := lipgloss.Width(dialog)
+
+	// Calculate centered position
 	startRow := (m.height - dialogHeight) / 2
 	if startRow < 0 {
 		startRow = 0
 	}
-
-	// Calculate horizontal position
-	dialogWidth := lipgloss.Width(dialog)
 	startCol := (m.width - dialogWidth) / 2
 	if startCol < 0 {
 		startCol = 0
 	}
 
-	// Build output
-	var result []string
-	for i := range max(len(bgLines), startRow+dialogHeight) {
-		if i < startRow || i >= startRow+dialogHeight {
-			if i < len(bgLines) {
-				result = append(result, bgLines[i])
-			} else {
-				result = append(result, "")
-			}
-		} else {
-			dialogLine := dialogLines[i-startRow]
-			// Dim the background line and overlay dialog
-			if i < len(bgLines) {
-				bgLine := bgLines[i]
-				// Simple overlay: pad left then append dialog
-				if startCol > len(bgLine) {
-					result = append(result, strings.Repeat(" ", startCol)+dialogLine)
-				} else {
-					// Overlay dialog on background
-					line := bgLine[:min(startCol, len(bgLine))] + dialogLine
-					result = append(result, line)
-				}
-			} else {
-				result = append(result, strings.Repeat(" ", startCol)+dialogLine)
-			}
+	// Build the centered dialog with padding
+	var result strings.Builder
+	for i := 0; i < m.height; i++ {
+		if i > 0 {
+			result.WriteString("\n")
 		}
+		if i >= startRow && i < startRow+dialogHeight {
+			// Dialog row - pad left to center
+			result.WriteString(strings.Repeat(" ", startCol))
+			result.WriteString(dialogLines[i-startRow])
+		}
+		// Non-dialog rows are left empty (alt screen clears them)
 	}
 
-	return strings.Join(result, "\n")
+	return result.String()
 }
 
 // startStreamingScan starts the scanning process and streams files as they're found.
@@ -653,21 +636,28 @@ func (m Model) tryDaemonInstantLoad() *DaemonFilesMsg {
 	}
 	defer daemonClient.Close()
 
+	// Resolve symlinks in root path to match daemon's indexed paths
+	// (e.g., /Volumes/Development -> /Users/user/Development)
+	root := m.options.Root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	// Check if index is ready for this path
-	ready, err := daemonClient.IsIndexReady(m.ctx, m.options.Root)
+	ready, err := daemonClient.IsIndexReady(m.ctx, root)
 	if err != nil || !ready {
 		return nil
 	}
 
 	// Query the daemon - get all files at once
-	files, err := daemonClient.GetLargeFiles(m.ctx, m.options.Root, m.options.MinSize, m.options.Exclude, 0)
+	files, err := daemonClient.GetLargeFiles(m.ctx, root, m.options.MinSize, m.options.Exclude, 0)
 	if err != nil {
 		return nil
 	}
 
 	// Get index status for statistics
 	var dirsIndexed, filesIndexed int64
-	if status, err := daemonClient.GetIndexStatus(m.ctx, m.options.Root); err == nil && status != nil {
+	if status, err := daemonClient.GetIndexStatus(m.ctx, root); err == nil && status != nil {
 		dirsIndexed = status.DirsIndexed
 		filesIndexed = status.FilesIndexed
 	}

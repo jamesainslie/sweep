@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
@@ -31,11 +33,12 @@ type ResultModel struct {
 	width    int
 	height   int
 	metrics  ScanMetrics
+	table    table.Model
 }
 
 // NewResultModel creates a new result model with the given files.
 func NewResultModel(files []types.FileInfo) ResultModel {
-	return ResultModel{
+	m := ResultModel{
 		files:    files,
 		cursor:   0,
 		selected: make(map[int]bool),
@@ -43,11 +46,13 @@ func NewResultModel(files []types.FileInfo) ResultModel {
 		width:    80,
 		height:   24,
 	}
+	m.table = m.createTable()
+	return m
 }
 
 // NewResultModelWithMetrics creates a new result model with files and scan metrics.
 func NewResultModelWithMetrics(files []types.FileInfo, metrics ScanMetrics) ResultModel {
-	return ResultModel{
+	m := ResultModel{
 		files:    files,
 		cursor:   0,
 		selected: make(map[int]bool),
@@ -56,6 +61,8 @@ func NewResultModelWithMetrics(files []types.FileInfo, metrics ScanMetrics) Resu
 		height:   24,
 		metrics:  metrics,
 	}
+	m.table = m.createTable()
+	return m
 }
 
 // Init initializes the result model.
@@ -81,32 +88,35 @@ func (m *ResultModel) HandleKey(key string) tea.Cmd {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
-			m.ensureVisible()
+			m.table.SetCursor(m.cursor)
 		}
 
 	case "down", "j":
 		if m.cursor < len(m.files)-1 {
 			m.cursor++
-			m.ensureVisible()
+			m.table.SetCursor(m.cursor)
 		}
 
 	case " ":
 		m.Toggle(m.cursor)
+		m.updateTable()
 
 	case "a":
 		m.SelectAll()
+		m.updateTable()
 
 	case "n":
 		m.SelectNone()
+		m.updateTable()
 
 	case "home", "g":
 		m.cursor = 0
-		m.offset = 0
+		m.table.SetCursor(0)
 
 	case "end", "G":
 		if len(m.files) > 0 {
 			m.cursor = len(m.files) - 1
-			m.ensureVisible()
+			m.table.SetCursor(m.cursor)
 		}
 
 	case "pgup":
@@ -115,7 +125,7 @@ func (m *ResultModel) HandleKey(key string) tea.Cmd {
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
-		m.ensureVisible()
+		m.table.SetCursor(m.cursor)
 
 	case "pgdown":
 		visibleRows := m.visibleRows()
@@ -123,7 +133,7 @@ func (m *ResultModel) HandleKey(key string) tea.Cmd {
 		if m.cursor >= len(m.files) {
 			m.cursor = len(m.files) - 1
 		}
-		m.ensureVisible()
+		m.table.SetCursor(m.cursor)
 	}
 
 	return nil
@@ -271,128 +281,146 @@ func (m ResultModel) renderHelpBar(width int) string {
 	return "  " + strings.Join(parts, "  ")
 }
 
-// renderFileList renders the scrollable file list.
-func (m ResultModel) renderFileList(width int) string {
-	var b strings.Builder
-
-	visibleRows := m.visibleRows()
-	// Layout: checkbox(3) + size(9) + type(8) + cursor(2) + filename(rest)
-	filenameWidth := width - 26
+// createTable creates and configures the file table.
+func (m ResultModel) createTable() table.Model {
+	// Calculate column widths based on available width
+	// Reserve space for: border (4), checkbox (5), size (10), spacing (6)
+	filenameWidth := m.width - 25
 	if filenameWidth < 20 {
 		filenameWidth = 20
 	}
 
-	// Render visible files
-	for i := m.offset; i < m.offset+visibleRows && i < len(m.files); i++ {
-		file := m.files[i]
-		isSelected := m.selected[i]
-		isCursor := i == m.cursor
+	columns := []table.Column{
+		{Title: "", Width: 3},                  // Checkbox
+		{Title: "Size", Width: 10},             // Size
+		{Title: "File", Width: filenameWidth},  // Filename
+	}
 
-		// Build the line
-		line := m.renderFileLine(file, i, isSelected, isCursor, filenameWidth)
-		b.WriteString(line)
-		b.WriteString("\n")
+	rows := m.buildTableRows(filenameWidth)
 
-		// Show details for cursor item (includes full path)
-		if isCursor {
-			details := m.renderFileDetails(file, width)
-			b.WriteString(details)
-			b.WriteString("\n")
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(true),
+		table.WithHeight(m.visibleRows()),
+	)
+
+	// Style the table
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
+		BorderBottom(true).
+		Bold(true).
+		Foreground(primaryColor)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(highlightColor).
+		Bold(true)
+	s.Cell = s.Cell.
+		Foreground(lipgloss.Color("#CCCCCC"))
+	t.SetStyles(s)
+
+	return t
+}
+
+// buildTableRows converts files to table rows.
+func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
+	rows := make([]table.Row, len(m.files))
+	for i, file := range m.files {
+		// Checkbox
+		checkbox := "[ ]"
+		if m.selected[i] {
+			checkbox = "[x]"
 		}
-	}
 
-	// Pad remaining rows to maintain consistent list height
-	// Target height = visibleRows + 1 (for cursor detail line)
-	rendered := m.offset + visibleRows
-	if rendered > len(m.files) {
-		rendered = len(m.files)
-	}
-	// Count actual lines rendered (files + cursor detail)
-	lineCount := 0
-	for i := m.offset; i < rendered; i++ {
-		lineCount++ // file line
-		if i == m.cursor {
-			lineCount++ // detail line
+		// Size (right-aligned within column)
+		size := padLeft(types.FormatSize(file.Size), 9)
+
+		// Filename truncated to fit
+		filename := filepath.Base(file.Path)
+		if len(filename) > filenameWidth {
+			filename = filename[:filenameWidth-3] + "..."
 		}
+
+		rows[i] = table.Row{checkbox, size, filename}
 	}
-	targetLines := visibleRows + 1 // +1 for cursor detail line
-	for lineCount < targetLines {
-		b.WriteString("\n")
-		lineCount++
+	return rows
+}
+
+// updateTable refreshes the table with current data.
+func (m *ResultModel) updateTable() {
+	filenameWidth := m.width - 25
+	if filenameWidth < 20 {
+		filenameWidth = 20
+	}
+	rows := m.buildTableRows(filenameWidth)
+	m.table.SetRows(rows)
+	m.table.SetCursor(m.cursor)
+}
+
+// renderFileList renders the file table with a detail panel below.
+func (m ResultModel) renderFileList(width int) string {
+	var b strings.Builder
+
+	// Render the table
+	tableView := m.table.View()
+	b.WriteString(tableView)
+	b.WriteString("\n")
+
+	// Detail panel for selected file
+	if m.cursor >= 0 && m.cursor < len(m.files) {
+		b.WriteString(m.renderDetailPanel(m.files[m.cursor], width))
 	}
 
 	return b.String()
 }
 
-// renderFileLine renders a single file line.
-func (m ResultModel) renderFileLine(file types.FileInfo, _ int, isSelected, isCursor bool, filenameWidth int) string {
-	// Checkbox
-	var checkbox string
-	if isSelected {
-		checkbox = checkedStyle.Render("[x]")
-	} else {
-		checkbox = uncheckedStyle.Render("[ ]")
+// renderDetailPanel renders a clean detail panel for the selected file.
+func (m ResultModel) renderDetailPanel(file types.FileInfo, width int) string {
+	var b strings.Builder
+
+	// Divider
+	b.WriteString(renderDivider(width))
+	b.WriteString("\n")
+
+	// Path line - show full path with home shortened
+	fullPath := file.Path
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(fullPath, home) {
+		fullPath = "~" + fullPath[len(home):]
 	}
 
-	// Size
-	size := fileSizeStyle.Render(padLeft(types.FormatSize(file.Size), 9))
+	// Truncate path if needed, keeping the end
+	maxPathLen := width - 10
+	if maxPathLen < 40 {
+		maxPathLen = 40
+	}
+	if len(fullPath) > maxPathLen {
+		fullPath = "…" + fullPath[len(fullPath)-(maxPathLen-1):]
+	}
 
-	// File type (extension)
+	pathLine := fmt.Sprintf("  Path: %s", fullPath)
+	b.WriteString(mutedTextStyle.Render(pathLine))
+	b.WriteString("\n")
+
+	// Metadata line
+	modTime := file.ModTime.Format("2006-01-02 15:04")
 	ext := filepath.Ext(file.Path)
 	if ext == "" {
-		ext = "-"
+		ext = "none"
 	} else {
 		ext = ext[1:] // Remove leading dot
 	}
-	if len(ext) > 6 {
-		ext = ext[:6]
-	}
-	fileType := mutedTextStyle.Render(padLeft(ext, 6))
 
-	// Filename only (not full path)
-	filename := filepath.Base(file.Path)
-	if len(filename) > filenameWidth {
-		filename = filename[:filenameWidth-3] + "..."
+	metaLine := fmt.Sprintf("  Modified: %s  |  Type: %s", modTime, ext)
+	if file.Owner != "" && file.Owner != "unknown" {
+		metaLine += fmt.Sprintf("  |  Owner: %s", file.Owner)
 	}
+	b.WriteString(mutedTextStyle.Render(metaLine))
+	b.WriteString("\n")
 
-	// Cursor indicator
-	var cursor string
-	if isCursor {
-		cursor = cursorStyle.Render(">")
-	} else {
-		cursor = " "
-	}
-
-	// Combine parts: checkbox + size + type + cursor + filename
-	line := fmt.Sprintf("  %s %s %s %s %s", checkbox, size, fileType, cursor, filename)
-
-	// Apply style based on cursor position
-	if isCursor {
-		return selectedItemStyle.Width(filenameWidth + 30).Render(line)
-	}
-	return normalItemStyle.Render(line)
-}
-
-// renderFileDetails renders the file detail line showing full path and metadata.
-func (m ResultModel) renderFileDetails(file types.FileInfo, width int) string {
-	modTime := file.ModTime.Format("2006-01-02")
-	owner := file.Owner
-	if owner == "" {
-		owner = "unknown"
-	}
-
-	// Show directory path (parent of the file)
-	dir := filepath.Dir(file.Path)
-	maxDirLen := width - 40 // Leave room for metadata
-	if maxDirLen < 20 {
-		maxDirLen = 20
-	}
-	if len(dir) > maxDirLen {
-		dir = "..." + dir[len(dir)-(maxDirLen-3):]
-	}
-
-	details := fmt.Sprintf("    %s  (Modified: %s, Owner: %s)", dir, modTime, owner)
-	return fileDetailStyle.Render(details)
+	return b.String()
 }
 
 // renderFooter renders the footer with selection summary.
@@ -512,10 +540,12 @@ func (m ResultModel) HasSelection() bool {
 	return len(m.selected) > 0
 }
 
-// SetDimensions updates the width and height.
+// SetDimensions updates the width and height and rebuilds the table.
 func (m *ResultModel) SetDimensions(width, height int) {
 	m.width = width
 	m.height = height
+	m.table = m.createTable()
+	m.table.SetCursor(m.cursor)
 }
 
 // AddFile inserts a file in sorted position (by size descending).
@@ -548,6 +578,9 @@ func (m *ResultModel) AddFile(file types.FileInfo) {
 	if m.cursor >= idx {
 		m.cursor++
 	}
+
+	// Update table with new data
+	m.updateTable()
 }
 
 // UpdateFile updates a file's size and mod time, re-sorting if needed.
@@ -654,8 +687,8 @@ func (m *ResultModel) removeFileAtIndex(idx int) {
 		m.cursor = len(m.files) - 1
 	}
 
-	// Ensure offset is still valid.
-	m.ensureVisible()
+	// Update table with new data
+	m.updateTable()
 }
 
 // ViewWithProgress renders the results with scan progress information in the footer.

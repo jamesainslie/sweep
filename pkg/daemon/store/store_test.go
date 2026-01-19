@@ -44,18 +44,15 @@ func TestStoreGetLargeFiles(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Add files of various sizes
-	files := []*store.Entry{
-		{Path: "/a/small.txt", Size: 100, IsDir: false},
-		{Path: "/a/medium.txt", Size: 1000, IsDir: false},
-		{Path: "/a/large.txt", Size: 10000, IsDir: false},
-		{Path: "/b/huge.txt", Size: 100000, IsDir: false},
+	// Add files to the large files index (used for fast queries)
+	largeFiles := []*store.Entry{
+		{Path: "/a/medium.txt", Size: 1000, ModTime: 1000, IsDir: false},
+		{Path: "/a/large.txt", Size: 10000, ModTime: 2000, IsDir: false},
+		{Path: "/b/huge.txt", Size: 100000, ModTime: 3000, IsDir: false},
 	}
 
-	for _, f := range files {
-		if err := s.Put(f); err != nil {
-			t.Fatalf("Put failed: %v", err)
-		}
+	if err := s.AddLargeFileBatch(largeFiles); err != nil {
+		t.Fatalf("AddLargeFileBatch failed: %v", err)
 	}
 
 	// Query for files >= 1000 bytes under /a
@@ -66,6 +63,11 @@ func TestStoreGetLargeFiles(t *testing.T) {
 
 	if len(results) != 2 {
 		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	// Verify sorting by size descending
+	if len(results) >= 2 && results[0].Size < results[1].Size {
+		t.Errorf("Results should be sorted by size descending")
 	}
 }
 
@@ -260,5 +262,100 @@ func TestIsPathUnderRoot(t *testing.T) {
 			t.Errorf("IsPathUnderRoot(%q, %q) = %v, expected %v",
 				tt.path, tt.root, got, tt.expected)
 		}
+	}
+}
+
+func TestLargeFilesIndex(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Initially no large files index
+	if s.HasLargeFilesIndex("/test") {
+		t.Error("Expected HasLargeFilesIndex to return false initially")
+	}
+
+	// Add a large file
+	if err := s.AddLargeFile("/test/big.bin", 100000, 1234567890); err != nil {
+		t.Fatalf("AddLargeFile failed: %v", err)
+	}
+
+	// Now it should have the index
+	if !s.HasLargeFilesIndex("/test") {
+		t.Error("Expected HasLargeFilesIndex to return true after adding file")
+	}
+
+	// Query it back
+	results, err := s.GetLargeFiles("/test", 0, 10)
+	if err != nil {
+		t.Fatalf("GetLargeFiles failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result, got %d", len(results))
+	}
+	if len(results) > 0 && results[0].Size != 100000 {
+		t.Errorf("Expected size 100000, got %d", results[0].Size)
+	}
+
+	// Remove the large file
+	if err := s.RemoveLargeFile("/test/big.bin"); err != nil {
+		t.Fatalf("RemoveLargeFile failed: %v", err)
+	}
+
+	// Should be empty now
+	results, err = s.GetLargeFiles("/test", 0, 10)
+	if err != nil {
+		t.Fatalf("GetLargeFiles after remove failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results after removal, got %d", len(results))
+	}
+}
+
+func TestRebuildLargeFilesIndex(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Add entries using Put (simulating old data without large files index)
+	entries := []*store.Entry{
+		{Path: "/root/small.txt", Size: 100, ModTime: 1000, IsDir: false},
+		{Path: "/root/large1.bin", Size: 15000000, ModTime: 2000, IsDir: false},
+		{Path: "/root/large2.bin", Size: 20000000, ModTime: 3000, IsDir: false},
+		{Path: "/root/dir", Size: 0, ModTime: 4000, IsDir: true},
+	}
+
+	for _, e := range entries {
+		if err := s.Put(e); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	// No large files index yet
+	if s.HasLargeFilesIndex("/root") {
+		t.Error("Expected no large files index before rebuild")
+	}
+
+	// Rebuild the index (10MB threshold)
+	count, err := s.RebuildLargeFilesIndex("/root", 10*1024*1024)
+	if err != nil {
+		t.Fatalf("RebuildLargeFilesIndex failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 large files indexed, got %d", count)
+	}
+
+	// Now query should work
+	results, err := s.GetLargeFiles("/root", 10*1024*1024, 10)
+	if err != nil {
+		t.Fatalf("GetLargeFiles failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
 	}
 }

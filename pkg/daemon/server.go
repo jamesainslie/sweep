@@ -15,8 +15,9 @@ import (
 
 // Config holds daemon configuration.
 type Config struct {
-	SocketPath string
-	DataDir    string
+	SocketPath       string
+	DataDir          string
+	MinLargeFileSize int64 // Threshold for large files index (0 = use default)
 }
 
 // Server is the sweepd gRPC server.
@@ -64,8 +65,11 @@ func NewServer(cfg Config) (*Server, error) {
 	// Create broadcaster for file events
 	bc := broadcaster.New()
 
-	// Create service with broadcaster
+	// Create service with broadcaster and optional config
 	svc := NewServiceWithBroadcaster(st, bc)
+	if cfg.MinLargeFileSize > 0 {
+		svc.indexer.MinLargeFileSize = cfg.MinLargeFileSize
+	}
 
 	srv := &Server{
 		cfg:         cfg,

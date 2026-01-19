@@ -559,20 +559,13 @@ func (m Model) startStreamingScan() tea.Cmd {
 	fileChan := m.fileChan
 	progressChan := m.progressChan
 	return func() tea.Msg {
-		debugLog("startStreamingScan: starting, NoDaemon=%v", m.options.NoDaemon)
-
 		// Try daemon first if not disabled - returns all files instantly
 		if !m.options.NoDaemon {
-			debugLog("startStreamingScan: trying daemon instant load")
 			if msg := m.tryDaemonInstantLoad(); msg != nil {
-				debugLog("startStreamingScan: daemon SUCCESS, got %d files", len(msg.Files))
 				close(fileChan)
 				close(progressChan)
 				return *msg
 			}
-			debugLog("startStreamingScan: daemon failed, falling back to scan")
-		} else {
-			debugLog("startStreamingScan: daemon disabled, using direct scan")
 		}
 
 		// Fall back to direct scan
@@ -627,69 +620,41 @@ func (m Model) listenForFiles() tea.Cmd {
 	}
 }
 
-// debugLog writes debug messages to a temp file for troubleshooting.
-func debugLog(format string, args ...interface{}) {
-	f, err := os.OpenFile("/tmp/sweep-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	msg := fmt.Sprintf(format, args...)
-	f.WriteString(time.Now().Format("15:04:05.000") + " " + msg + "\n")
-}
-
 // tryDaemonInstantLoad attempts to get all files from the daemon instantly.
 // Returns a DaemonFilesMsg if successful, nil otherwise.
 func (m Model) tryDaemonInstantLoad() *DaemonFilesMsg {
-	debugLog("tryDaemonInstantLoad: starting, root=%s", m.options.Root)
-
 	// Check if daemon is running
 	pidPath := client.DefaultPIDPath()
 	if !client.IsDaemonRunning(pidPath) {
-		debugLog("tryDaemonInstantLoad: daemon not running (pidPath=%s)", pidPath)
 		return nil
 	}
-	debugLog("tryDaemonInstantLoad: daemon is running")
 
 	// Try to connect to daemon
 	socketPath := client.DefaultSocketPath()
 	daemonClient, err := client.ConnectWithContext(m.ctx, socketPath)
 	if err != nil {
-		debugLog("tryDaemonInstantLoad: connect failed: %v", err)
 		return nil
 	}
 	defer daemonClient.Close()
-	debugLog("tryDaemonInstantLoad: connected to daemon")
 
 	// Resolve symlinks in root path to match daemon's indexed paths
 	// (e.g., /Volumes/Development -> /Users/user/Development)
 	root := m.options.Root
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		debugLog("tryDaemonInstantLoad: resolved symlink %s -> %s", m.options.Root, resolved)
 		root = resolved
-	} else {
-		debugLog("tryDaemonInstantLoad: symlink resolve failed: %v", err)
 	}
 
 	// Check if index is ready for this path
 	ready, err := daemonClient.IsIndexReady(m.ctx, root)
-	if err != nil {
-		debugLog("tryDaemonInstantLoad: IsIndexReady error: %v", err)
+	if err != nil || !ready {
 		return nil
 	}
-	if !ready {
-		debugLog("tryDaemonInstantLoad: index not ready for path %s", root)
-		return nil
-	}
-	debugLog("tryDaemonInstantLoad: index is ready")
 
 	// Query the daemon - get all files at once
 	files, err := daemonClient.GetLargeFiles(m.ctx, root, m.options.MinSize, m.options.Exclude, 0)
 	if err != nil {
-		debugLog("tryDaemonInstantLoad: GetLargeFiles error: %v", err)
 		return nil
 	}
-	debugLog("tryDaemonInstantLoad: got %d files from daemon", len(files))
 
 	// Get index status for statistics
 	var dirsIndexed, filesIndexed int64
@@ -698,8 +663,6 @@ func (m Model) tryDaemonInstantLoad() *DaemonFilesMsg {
 		filesIndexed = status.FilesIndexed
 	}
 
-	debugLog("tryDaemonInstantLoad: SUCCESS - returning %d files", len(files))
-	// Return all files at once
 	return &DaemonFilesMsg{
 		Files:        files,
 		DirsScanned:  dirsIndexed,

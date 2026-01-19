@@ -586,6 +586,20 @@ func (m *ResultModel) AddFile(file types.FileInfo) {
 	}
 }
 
+// SetFiles replaces all files at once, sorting by size descending.
+// This is O(n log n) vs O(n²) for calling AddFile repeatedly.
+// Use this for batch loading (e.g., from daemon).
+func (m *ResultModel) SetFiles(files []types.FileInfo) {
+	// Sort by size descending
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Size > files[j].Size
+	})
+	m.files = files
+	m.selected = make(map[int]bool)
+	m.cursor = 0
+	m.offset = 0
+}
+
 // UpdateFile updates a file's size and mod time, re-sorting if needed.
 // If the file is not found, it's added. If the new size is below min threshold,
 // the file is removed.

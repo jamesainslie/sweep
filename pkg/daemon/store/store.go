@@ -2,11 +2,20 @@
 package store
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/dgraph-io/badger/v4"
+)
+
+// Key prefixes for different data types
+const (
+	prefixEntry     = "e:" // Regular file/dir entries
+	prefixLargeFile = "l:" // Large files index (for fast queries)
+	prefixMeta      = "m:" // Metadata (counts, etc.)
 )
 
 // Entry represents a file or directory in the index.
@@ -94,6 +103,7 @@ func (s *Store) Get(path string) (*Entry, error) {
 }
 
 // GetLargeFiles returns files >= minSize under the given root path.
+// Uses the pre-computed large files index for fast queries.
 func (s *Store) GetLargeFiles(root string, minSize int64, limit int) ([]*Entry, error) {
 	var results []*Entry
 
@@ -103,22 +113,32 @@ func (s *Store) GetLargeFiles(root string, minSize int64, limit int) ([]*Entry, 
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		prefix := []byte(root)
+		// Use large files index: l:<root>/<path> -> size (8 bytes)
+		prefix := []byte(prefixLargeFile + root)
 		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 			if limit > 0 && len(results) >= limit {
 				break
 			}
 
 			item := it.Item()
-			err := item.Value(func(val []byte) error {
-				var entry Entry
-				if err := json.Unmarshal(val, &entry); err != nil {
-					return err
-				}
+			key := item.Key()
+			// Extract path from key (remove "l:" prefix)
+			path := string(key[len(prefixLargeFile):])
 
-				// Skip directories and small files
-				if !entry.IsDir && entry.Size >= minSize {
-					results = append(results, &entry)
+			err := item.Value(func(val []byte) error {
+				if len(val) < 16 {
+					return nil // Invalid entry
+				}
+				size := int64(binary.BigEndian.Uint64(val[0:8]))
+				modTime := int64(binary.BigEndian.Uint64(val[8:16]))
+
+				if size >= minSize {
+					results = append(results, &Entry{
+						Path:    path,
+						Size:    size,
+						ModTime: modTime,
+						IsDir:   false,
+					})
 				}
 				return nil
 			})
@@ -129,7 +149,124 @@ func (s *Store) GetLargeFiles(root string, minSize int64, limit int) ([]*Entry, 
 		return nil
 	})
 
+	// Sort by size descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Size > results[j].Size
+	})
+
 	return results, err
+}
+
+// AddLargeFile adds a file to the large files index for fast queries.
+// Call this during indexing for files that meet the size threshold.
+func (s *Store) AddLargeFile(path string, size, modTime int64) error {
+	key := []byte(prefixLargeFile + path)
+	val := make([]byte, 16)
+	binary.BigEndian.PutUint64(val[0:8], uint64(size))
+	binary.BigEndian.PutUint64(val[8:16], uint64(modTime))
+
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, val)
+	})
+}
+
+// AddLargeFileBatch adds multiple files to the large files index efficiently.
+func (s *Store) AddLargeFileBatch(files []*Entry) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	wb := s.db.NewWriteBatch()
+	defer wb.Cancel()
+
+	for _, f := range files {
+		key := []byte(prefixLargeFile + f.Path)
+		val := make([]byte, 16)
+		binary.BigEndian.PutUint64(val[0:8], uint64(f.Size))
+		binary.BigEndian.PutUint64(val[8:16], uint64(f.ModTime))
+		if err := wb.Set(key, val); err != nil {
+			return err
+		}
+	}
+
+	return wb.Flush()
+}
+
+// RemoveLargeFile removes a file from the large files index.
+func (s *Store) RemoveLargeFile(path string) error {
+	key := []byte(prefixLargeFile + path)
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete(key)
+	})
+}
+
+// RebuildLargeFilesIndex rebuilds the large files index from existing entries.
+// This is used for migration when upgrading from older versions.
+func (s *Store) RebuildLargeFilesIndex(root string, minSize int64) (int, error) {
+	var largeFiles []*Entry
+	var count int
+
+	// Scan all entries and collect large files
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte(root)
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			// Skip entries that are already in the large files index
+			key := it.Item().Key()
+			if len(key) > 2 && string(key[:2]) == prefixLargeFile {
+				continue
+			}
+
+			err := it.Item().Value(func(val []byte) error {
+				var entry Entry
+				if err := json.Unmarshal(val, &entry); err != nil {
+					return nil // Skip invalid entries
+				}
+				if !entry.IsDir && entry.Size >= minSize {
+					largeFiles = append(largeFiles, &entry)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	// Write to large files index
+	if len(largeFiles) > 0 {
+		if err := s.AddLargeFileBatch(largeFiles); err != nil {
+			return 0, err
+		}
+		count = len(largeFiles)
+	}
+
+	return count, nil
+}
+
+// HasLargeFilesIndex checks if the large files index exists for a root.
+func (s *Store) HasLargeFilesIndex(root string) bool {
+	var found bool
+	_ = s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte(prefixLargeFile + root)
+		it.Seek(prefix)
+		found = it.ValidForPrefix(prefix)
+		return nil
+	})
+	return found
 }
 
 // Delete removes an entry.

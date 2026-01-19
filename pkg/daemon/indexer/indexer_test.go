@@ -48,6 +48,8 @@ func TestIndexerIndexPath(t *testing.T) {
 	defer s.Close()
 
 	idx := indexer.New(s)
+	// Lower threshold for testing (test files are 100-50000 bytes)
+	idx.MinLargeFileSize = 5000
 
 	// Index the tree
 	result, err := idx.Index(context.Background(), root, nil)

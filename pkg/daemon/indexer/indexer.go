@@ -34,14 +34,22 @@ type Result struct {
 // ProgressFunc is called with progress updates.
 type ProgressFunc func(Progress)
 
+// DefaultMinLargeFileSize is the default threshold for files to be added to the large files index.
+// Files >= this size are indexed for fast large file queries.
+const DefaultMinLargeFileSize = 10 * 1024 * 1024 // 10 MiB
+
 // Indexer indexes filesystem paths into the store.
 type Indexer struct {
-	store *store.Store
+	store            *store.Store
+	MinLargeFileSize int64 // Threshold for large files index (default: DefaultMinLargeFileSize)
 }
 
-// New creates a new indexer.
+// New creates a new indexer with default settings.
 func New(s *store.Store) *Indexer {
-	return &Indexer{store: s}
+	return &Indexer{
+		store:            s,
+		MinLargeFileSize: DefaultMinLargeFileSize,
+	}
 }
 
 // indexState holds the state during indexing.
@@ -52,6 +60,7 @@ type indexState struct {
 	currentPath  atomic.Value
 	entriesMu    sync.Mutex
 	entries      []*store.Entry
+	largeFiles   []*store.Entry // Files >= MinLargeFileSize for fast queries
 }
 
 // Index indexes a path and stores results.
@@ -174,6 +183,10 @@ func (idx *Indexer) processEntry(path string, info fs.FileInfo, isDir bool, stat
 
 	state.entriesMu.Lock()
 	state.entries = append(state.entries, entry)
+	// Track large files for fast queries
+	if !isDir && info.Size() >= idx.MinLargeFileSize {
+		state.largeFiles = append(state.largeFiles, entry)
+	}
 	state.entriesMu.Unlock()
 
 	if isDir {
@@ -205,11 +218,24 @@ func (idx *Indexer) flushBatchIfNeeded(state *indexState) error {
 func (idx *Indexer) flushRemainingEntries(state *indexState) error {
 	state.entriesMu.Lock()
 	remaining := state.entries
+	largeFiles := state.largeFiles
+	state.entries = nil
+	state.largeFiles = nil
 	state.entriesMu.Unlock()
 
 	if len(remaining) > 0 {
-		return idx.store.PutBatch(remaining)
+		if err := idx.store.PutBatch(remaining); err != nil {
+			return err
+		}
 	}
+
+	// Write large files to the fast-query index
+	if len(largeFiles) > 0 {
+		if err := idx.store.AddLargeFileBatch(largeFiles); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

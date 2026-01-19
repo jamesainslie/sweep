@@ -39,8 +39,9 @@ func TestServiceGetLargeFiles(t *testing.T) {
 	socketPath := filepath.Join(tmpDir, "test.sock")
 
 	cfg := daemon.Config{
-		SocketPath: socketPath,
-		DataDir:    filepath.Join(tmpDir, "data"),
+		SocketPath:       socketPath,
+		DataDir:          filepath.Join(tmpDir, "data"),
+		MinLargeFileSize: 5000, // Lower threshold for testing
 	}
 
 	srv, err := daemon.NewServer(cfg)

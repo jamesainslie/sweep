@@ -256,16 +256,20 @@ func (m ResultModel) renderHelpBar(width int) string {
 
 // createTable creates and configures the file table.
 func (m ResultModel) createTable() table.Model {
-	// Calculate column widths based on available width
-	// Layout: checkbox (4) + size (10) + filename (rest) + padding (4)
-	contentWidth := m.width - 6 // Account for outer borders
-	filenameWidth := contentWidth - 18
+	// Use full terminal width for the table
+	tableWidth := m.width - 4 // Account for outer box padding
+	if tableWidth < 60 {
+		tableWidth = 60
+	}
+
+	// Layout: checkbox (3) + size (10) + filename (rest)
+	filenameWidth := tableWidth - 17
 	if filenameWidth < 20 {
 		filenameWidth = 20
 	}
 
 	columns := []table.Column{
-		{Title: "", Width: 4},                 // Checkbox [x]
+		{Title: "", Width: 3},                 // Checkbox
 		{Title: "Size", Width: 10},            // Size
 		{Title: "File", Width: filenameWidth}, // Filename
 	}
@@ -277,10 +281,10 @@ func (m ResultModel) createTable() table.Model {
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(m.visibleRows()),
-		table.WithWidth(contentWidth),
+		table.WithWidth(tableWidth),
 	)
 
-	// Style the table with subtle orange glow for selected row
+	// Style the table with warm orange highlight for selected row
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -290,10 +294,10 @@ func (m ResultModel) createTable() table.Model {
 		Foreground(primaryColor)
 	s.Selected = s.Selected.
 		Foreground(lipgloss.Color("#FFFFFF")).
-		Background(lipgloss.Color("#3D2800")). // Subtle dark orange/amber glow
+		Background(lipgloss.Color("#804000")). // Warm burnt orange - visible but not harsh
 		Bold(true)
 	s.Cell = s.Cell.
-		Foreground(lipgloss.Color("#CCCCCC"))
+		Foreground(lipgloss.Color("#AAAAAA"))
 	t.SetStyles(s)
 
 	// Configure key bindings for vim-style navigation
@@ -307,20 +311,14 @@ func (m ResultModel) createTable() table.Model {
 	return t
 }
 
-// Checkbox styles for the table.
-var (
-	checkedIcon   = lipgloss.NewStyle().Foreground(lipgloss.Color("#28A745")).Bold(true).Render("✔")
-	uncheckedIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○")
-)
-
 // buildTableRows converts files to table rows.
 func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
 	rows := make([]table.Row, len(m.files))
 	for i, file := range m.files {
-		// Checkbox with styled icon
-		checkbox := " " + uncheckedIcon + " "
+		// Use plain Unicode symbols - table styling handles colors
+		checkbox := " ○"
 		if m.selected[i] {
-			checkbox = " " + checkedIcon + " "
+			checkbox = " ✓"
 		}
 
 		// Size (right-aligned within column)
@@ -339,8 +337,11 @@ func (m ResultModel) buildTableRows(filenameWidth int) []table.Row {
 
 // updateTable refreshes the table with current data.
 func (m *ResultModel) updateTable() {
-	contentWidth := m.width - 6
-	filenameWidth := contentWidth - 18
+	tableWidth := m.width - 4
+	if tableWidth < 60 {
+		tableWidth = 60
+	}
+	filenameWidth := tableWidth - 17
 	if filenameWidth < 20 {
 		filenameWidth = 20
 	}
@@ -744,15 +745,20 @@ func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, not
 
 // renderHeaderWithLive renders the header with an optional live indicator.
 func (m ResultModel) renderHeaderWithLive(width int, liveWatching bool) string {
-	title := fmt.Sprintf("  sweep - %d files over threshold (Total: %s)",
+	title := fmt.Sprintf("█ sweep - %d files over threshold (Total: %s)",
 		len(m.files), types.FormatSize(m.TotalSize()))
 
 	if liveWatching {
-		liveIndicator := notificationAddedStyle.Render("● LIVE")
+		liveIndicator := successTextStyle.Render("● LIVE")
 		title = title + "  " + liveIndicator
 	}
 
-	_ = width // Suppress unused warning
+	// Pad to full width for visibility
+	titleLen := lipgloss.Width(title)
+	if titleLen < width {
+		title = title + strings.Repeat(" ", width-titleLen)
+	}
+
 	return titleStyle.Render(title)
 }
 

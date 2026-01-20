@@ -305,28 +305,22 @@ var (
 	rowNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC"))
 
-	// Checkbox characters
-	checkSelectedChar   = "✓"
-	checkUnselectedChar = "○"
+	// Checkbox characters and colors (Width/Align applied at render time per lipgloss table pattern)
+	checkSelectedChar      = "✓"
+	checkUnselectedChar    = "○"
+	checkboxCheckedColor   = lipgloss.Color("#00FF00")
+	checkboxUncheckedColor = lipgloss.Color("#666666")
 
-	// Checkbox column style: 3 cells wide, centered
-	// Width and Align MUST be on the style that calls Render()
-	checkboxColStyle = lipgloss.NewStyle().Width(3).Align(lipgloss.Center)
-
-	// Checkbox styles inherit Width/Align and add color
-	checkboxCheckedStyle   = checkboxColStyle.Foreground(lipgloss.Color("#00FF00")).Bold(true)
-	checkboxUncheckedStyle = checkboxColStyle.Foreground(lipgloss.Color("#666666"))
-
-	// Size style
-	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)
+	// Size style - Width/Align applied at render time
+	sizeColor = lipgloss.Color("#00AAFF")
 )
 
 // renderFileList renders the scrollable file list with full-width highlighting.
 func (m ResultModel) renderFileList(width int) string {
 	var b strings.Builder
 
-	// Header row
-	header := fmt.Sprintf("   %s  %s", padLeft("Size", 10), "File")
+	// Header row - checkbox col (3) + size col (8) + gap (2) + filename
+	header := fmt.Sprintf("%s%s  %s", centerCell("", 3), padLeft("Size", 8), "File")
 	b.WriteString(mutedTextStyle.Render(header))
 	b.WriteString("\n")
 	b.WriteString(renderDivider(width))
@@ -341,8 +335,8 @@ func (m ResultModel) renderFileList(width int) string {
 		filename := filepath.Base(file.Path)
 
 		// Calculate available width for filename
-		// Layout: checkbox(3) + size(10) + "  " + filename = 3 + 10 + 2 = 15 chars before filename
-		filenameWidth := width - 15
+		// Layout: checkbox(3) + size(8) + "  " + filename = 3 + 8 + 2 = 13 chars before filename
+		filenameWidth := width - 13
 		if filenameWidth < 20 {
 			filenameWidth = 20
 		}
@@ -350,32 +344,35 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Determine checkbox character
+		// Determine checkbox character and color
 		var checkChar string
+		var checkColor lipgloss.Color
 		if isSelected {
 			checkChar = checkSelectedChar
+			checkColor = checkboxCheckedColor
 		} else {
 			checkChar = checkUnselectedChar
+			checkColor = checkboxUncheckedColor
 		}
 
-		// For highlighted row, use plain text so background spans full width
-		// For normal rows, use styled checkbox (Width/Align built into style)
+		// Checkbox with space after, then size right-aligned in 8 chars (tighter fit)
+		centeredCheck := " " + checkChar + " "
+		sizeStr := padLeft(types.FormatSize(file.Size), 8)
+
 		if isCursor {
-			// Plain text row - center manually since no lipgloss style
-			checkbox := centerCell(checkChar, 3)
-			size := padLeft(types.FormatSize(file.Size), 10)
-			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
+			// Highlighted row - plain text with background
+			row := fmt.Sprintf("%s%s  %s", centeredCheck, sizeStr, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
-			// Styled row - lipgloss handles centering via Width(3).Align(Center)
-			var checkbox string
-			if isSelected {
-				checkbox = checkboxCheckedStyle.Render(checkChar)
-			} else {
-				checkbox = checkboxUncheckedStyle.Render(checkChar)
-			}
-			size := sizeStyle.Render(types.FormatSize(file.Size))
-			row := checkbox + size + "  " + filename
+			// Normal row - apply colors to pre-centered content
+			styledCheck := lipgloss.NewStyle().
+				Foreground(checkColor).
+				Bold(isSelected).
+				Render(centeredCheck)
+			styledSize := lipgloss.NewStyle().
+				Foreground(sizeColor).
+				Render(sizeStr)
+			row := styledCheck + styledSize + "  " + filename
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

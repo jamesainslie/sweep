@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -70,10 +71,16 @@ func main() {
 	dataDir := filepath.Join(xdg.DataHome, "sweep")
 	socketPath := filepath.Join(dataDir, "sweep.sock")
 	pidPath := filepath.Join(dataDir, "sweep.pid")
+	statusPath := daemon.StatusPath(dataDir)
 
-	// Check if already running
-	if daemon.IsDaemonRunning(pidPath) {
-		fmt.Fprintln(os.Stderr, "sweepd is already running")
+	// Attempt stale lock recovery
+	if err := daemon.RecoverFromStaleDaemon(pidPath, socketPath, dataDir); err != nil {
+		if errors.Is(err, daemon.ErrDaemonAlreadyRunning) {
+			fmt.Fprintln(os.Stderr, "sweepd is already running")
+			os.Exit(1)
+		}
+		log.Error("failed to recover from stale daemon", "error", err)
+		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
 		os.Exit(1)
 	}
 
@@ -86,12 +93,14 @@ func main() {
 	srv, err := daemon.NewServer(srvCfg)
 	if err != nil {
 		log.Error("failed to create server", "error", err)
+		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
 		os.Exit(1)
 	}
 
 	// Write PID file
 	if err := daemon.WritePIDFile(pidPath); err != nil {
 		log.Error("failed to write PID file", "error", err)
+		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
 		os.Exit(1)
 	}
 	defer func() {
@@ -99,6 +108,12 @@ func main() {
 			log.Warn("failed to remove PID file", "error", err)
 		}
 	}()
+
+	// Write ready status
+	if err := daemon.WriteStatusReady(statusPath); err != nil {
+		log.Warn("failed to write status file", "error", err)
+	}
+	defer func() { _ = daemon.RemoveStatus(statusPath) }() // Best-effort cleanup
 
 	// Handle shutdown signals and RPC shutdown requests
 	sigChan := make(chan os.Signal, 1)

@@ -2,15 +2,29 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/jamesainslie/sweep/pkg/client"
+	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 	"github.com/spf13/cobra"
 )
+
+// daemonPaths returns DaemonPaths from the current config.
+// Returns empty paths on config error; client functions use defaults for empty values.
+func daemonPaths() client.DaemonPaths {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		return client.DaemonPaths{} // Empty values trigger defaults in client
+	}
+	return client.DaemonPaths{
+		Binary: cfg.Daemon.BinaryPath,
+		Socket: cfg.Daemon.SocketPath,
+		PID:    cfg.Daemon.PIDPath,
+	}
+}
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
@@ -79,82 +93,39 @@ func init() {
 }
 
 func runDaemonStart(_ *cobra.Command, _ []string) error {
-	printVerbose("starting daemon...")
-	if err := client.StartDaemon(); err != nil {
-		printVerbose("start failed: %v", err)
+	if err := client.StartDaemon(daemonPaths()); err != nil {
 		return err
 	}
-	printVerbose("daemon started successfully")
 	printInfo("Daemon started")
 	return nil
 }
 
 func runDaemonStop(_ *cobra.Command, _ []string) error {
-	pidPath := client.DefaultPIDPath()
-	socketPath := client.DefaultSocketPath()
-
-	printVerbose("checking PID file: %s", pidPath)
-	printVerbose("socket path: %s", socketPath)
-
-	// Check if running
-	if !client.IsDaemonRunning(pidPath) {
-		printVerbose("daemon not running (PID check failed)")
-		return errors.New("daemon is not running")
+	if err := client.StopDaemon(daemonPaths()); err != nil {
+		return err
 	}
-	printVerbose("daemon is running")
-
-	// Connect and send shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	printVerbose("connecting to daemon...")
-	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
-	if err != nil {
-		return fmt.Errorf("failed to connect to daemon: %w", err)
-	}
-	defer daemonClient.Close()
-	printVerbose("connected, sending shutdown request...")
-
-	if err := daemonClient.Shutdown(ctx); err != nil {
-		return fmt.Errorf("failed to stop daemon: %w", err)
-	}
-	printVerbose("shutdown request sent, waiting for daemon to stop...")
-
-	// Wait for the daemon to stop
-	for i := range 20 {
-		time.Sleep(250 * time.Millisecond)
-		if !client.IsDaemonRunning(pidPath) {
-			printVerbose("daemon stopped after %d checks", i+1)
-			printInfo("Daemon stopped")
-			return nil
-		}
-		printVerbose("still running (check %d/20)", i+1)
-	}
-
-	return errors.New("daemon did not stop in time")
+	printInfo("Daemon stopped")
+	return nil
 }
 
-func runDaemonRestart(cmd *cobra.Command, args []string) error {
-	pidPath := client.DefaultPIDPath()
-
-	// Stop if running
-	if client.IsDaemonRunning(pidPath) {
-		if err := runDaemonStop(cmd, args); err != nil {
-			return fmt.Errorf("failed to stop daemon: %w", err)
-		}
+func runDaemonRestart(_ *cobra.Command, _ []string) error {
+	if err := client.RestartDaemon(daemonPaths()); err != nil {
+		return err
 	}
-
-	// Start daemon
-	if err := runDaemonStart(cmd, args); err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
-	}
-
+	printInfo("Daemon restarted")
 	return nil
 }
 
 func runDaemonStatus(_ *cobra.Command, _ []string) error {
-	pidPath := client.DefaultPIDPath()
-	socketPath := client.DefaultSocketPath()
+	paths := daemonPaths()
+	pidPath := paths.PID
+	socketPath := paths.Socket
+	if pidPath == "" {
+		pidPath = client.DefaultPIDPath()
+	}
+	if socketPath == "" {
+		socketPath = client.DefaultSocketPath()
+	}
 
 	// Check if running
 	if !client.IsDaemonRunning(pidPath) {
@@ -175,7 +146,7 @@ func runDaemonStatus(_ *cobra.Command, _ []string) error {
 
 	status, err := daemonClient.GetDaemonStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get daemon status: %w", err)
+		return fmt.Errorf("get daemon status: %w", err)
 	}
 
 	printInfo("Daemon status: running")
@@ -195,12 +166,10 @@ func runDaemonStatus(_ *cobra.Command, _ []string) error {
 }
 
 func runDaemonIndex(cmd *cobra.Command, args []string) error {
-	pidPath := client.DefaultPIDPath()
-	socketPath := client.DefaultSocketPath()
-
-	// Check if running
-	if !client.IsDaemonRunning(pidPath) {
-		return errors.New("daemon is not running (start with: sweep daemon start)")
+	paths := daemonPaths()
+	socketPath := paths.Socket
+	if socketPath == "" {
+		socketPath = client.DefaultSocketPath()
 	}
 
 	// Determine path
@@ -212,7 +181,7 @@ func runDaemonIndex(cmd *cobra.Command, args []string) error {
 	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("failed to resolve path: %w", err)
+		return fmt.Errorf("resolve path: %w", err)
 	}
 
 	// Connect and trigger index
@@ -221,13 +190,13 @@ func runDaemonIndex(cmd *cobra.Command, args []string) error {
 
 	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
 	if err != nil {
-		return fmt.Errorf("failed to connect to daemon: %w", err)
+		return fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer daemonClient.Close()
 
 	force, _ := cmd.Flags().GetBool("force")
 	if err := daemonClient.TriggerIndex(ctx, absPath, force); err != nil {
-		return fmt.Errorf("failed to trigger indexing: %w", err)
+		return fmt.Errorf("trigger indexing: %w", err)
 	}
 
 	printInfo("Indexing started for %s", absPath)
@@ -235,12 +204,10 @@ func runDaemonIndex(cmd *cobra.Command, args []string) error {
 }
 
 func runDaemonClear(_ *cobra.Command, args []string) error {
-	pidPath := client.DefaultPIDPath()
-	socketPath := client.DefaultSocketPath()
-
-	// Check if running
-	if !client.IsDaemonRunning(pidPath) {
-		return errors.New("daemon is not running")
+	paths := daemonPaths()
+	socketPath := paths.Socket
+	if socketPath == "" {
+		socketPath = client.DefaultSocketPath()
 	}
 
 	// Determine path (empty means all)
@@ -248,7 +215,7 @@ func runDaemonClear(_ *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		absPath, err := filepath.Abs(args[0])
 		if err != nil {
-			return fmt.Errorf("failed to resolve path: %w", err)
+			return fmt.Errorf("resolve path: %w", err)
 		}
 		path = absPath
 	}
@@ -259,13 +226,13 @@ func runDaemonClear(_ *cobra.Command, args []string) error {
 
 	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
 	if err != nil {
-		return fmt.Errorf("failed to connect to daemon: %w", err)
+		return fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer daemonClient.Close()
 
 	cleared, err := daemonClient.ClearCache(ctx, path)
 	if err != nil {
-		return fmt.Errorf("failed to clear cache: %w", err)
+		return fmt.Errorf("clear cache: %w", err)
 	}
 
 	if path == "" {

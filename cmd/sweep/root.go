@@ -1,14 +1,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
@@ -193,7 +189,12 @@ func initializeLogging(_ *cobra.Command, _ []string) error {
 
 	// Auto-start daemon if configured and not bypassed
 	if cfg.Daemon.AutoStart && !viper.GetBool("no_daemon") {
-		if err := maybeStartDaemon(cfg); err != nil {
+		paths := client.DaemonPaths{
+			Binary: cfg.Daemon.BinaryPath,
+			Socket: cfg.Daemon.SocketPath,
+			PID:    cfg.Daemon.PIDPath,
+		}
+		if err := client.EnsureDaemon(paths); err != nil {
 			log.Warn("failed to auto-start daemon", "error", err)
 			// Continue anyway - not fatal
 		}
@@ -244,74 +245,6 @@ func buildLoggingConfig() (logging.Config, *config.Config, error) {
 	}
 
 	return logCfg, cfg, nil
-}
-
-// maybeStartDaemon starts the daemon if it's not already running.
-func maybeStartDaemon(cfg *config.Config) error {
-	pidPath := cfg.Daemon.PIDPath
-	if pidPath == "" {
-		pidPath = config.DefaultPIDPath()
-	}
-
-	if client.IsDaemonRunning(pidPath) {
-		logging.Get("client").Debug("daemon already running")
-		return nil
-	}
-
-	// Find sweepd binary (same directory as sweep first, then PATH)
-	// This ensures we use the matching version of sweepd
-	var sweepd string
-	execPath, err := os.Executable()
-	if err == nil {
-		sweepd = filepath.Join(filepath.Dir(execPath), "sweepd")
-		if _, statErr := os.Stat(sweepd); statErr != nil {
-			sweepd = "" // Not found in same directory
-		}
-	}
-	if sweepd == "" {
-		// Fallback to PATH
-		var lookErr error
-		sweepd, lookErr = exec.LookPath("sweepd")
-		if lookErr != nil {
-			return errors.New("sweepd not found")
-		}
-	}
-
-	// Start daemon in background
-	cmd := exec.Command(sweepd)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // Detach from parent process group
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting daemon: %w", err)
-	}
-
-	logging.Get("client").Info("started daemon", "pid", cmd.Process.Pid)
-
-	// Detach from parent process so daemon outlives caller
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
-
-	// Wait for socket to be ready (daemon is fully initialized)
-	socketPath := cfg.Daemon.SocketPath
-	if socketPath == "" {
-		socketPath = config.DefaultSocketPath()
-	}
-	for range 50 {
-		time.Sleep(100 * time.Millisecond)
-		if _, err := os.Stat(socketPath); err == nil {
-			logging.Get("client").Debug("daemon ready", "socket", socketPath)
-			return nil
-		}
-	}
-
-	// Daemon didn't start successfully, but don't fail - this is auto-start
-	logging.Get("client").Warn("daemon may not have started successfully")
-	return nil
 }
 
 // initTUILogging re-initializes logging for TUI mode.

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 )
@@ -132,7 +133,7 @@ func TestInitializeLoggingEnsuresDirectories(t *testing.T) {
 	_ = logging.Close()
 }
 
-func TestMaybeStartDaemonAlreadyRunning(t *testing.T) {
+func TestEnsureDaemonAlreadyRunning(t *testing.T) {
 	// Create a temporary PID file with current process ID
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "sweep.pid")
@@ -144,60 +145,44 @@ func TestMaybeStartDaemonAlreadyRunning(t *testing.T) {
 		t.Fatalf("failed to write PID file: %v", err)
 	}
 
-	// Create config with the test PID path
-	cfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			AutoStart: true,
-			PIDPath:   pidPath,
-		},
-	}
-
-	// Should not return error when daemon is already running
-	err = maybeStartDaemon(cfg)
+	// Should not return error when daemon is already running (idempotent)
+	paths := client.DaemonPaths{PID: pidPath}
+	err = client.EnsureDaemon(paths)
 	if err != nil {
-		t.Errorf("maybeStartDaemon() returned error when daemon is running: %v", err)
+		t.Errorf("EnsureDaemon() returned error when daemon is running: %v", err)
 	}
 }
 
-func TestMaybeStartDaemonNoPIDFile(t *testing.T) {
+func TestEnsureDaemonNoPIDFile(t *testing.T) {
 	// Create config with non-existent PID path
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "nonexistent.pid")
+	socketPath := filepath.Join(tempDir, "sweep.sock")
 
-	cfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			AutoStart: true,
-			PIDPath:   pidPath,
-		},
+	paths := client.DaemonPaths{
+		PID:    pidPath,
+		Socket: socketPath,
 	}
 
 	// Should attempt to start daemon (but fail since sweepd isn't available in tests)
-	// The important thing is it doesn't crash and handles the missing daemon gracefully
-	err := maybeStartDaemon(cfg)
+	err := client.EnsureDaemon(paths)
 	// We expect an error since sweepd binary won't be found in test environment
-	// This is acceptable behavior - the caller will log a warning
 	if err == nil {
-		// If no error, that's also fine (means sweepd was somehow found)
-		t.Log("maybeStartDaemon() succeeded - sweepd binary was found")
+		t.Log("EnsureDaemon() succeeded - sweepd binary was found")
 	} else {
-		t.Logf("maybeStartDaemon() returned expected error (sweepd not found): %v", err)
+		t.Logf("EnsureDaemon() returned expected error (sweepd not found): %v", err)
 	}
 }
 
-func TestMaybeStartDaemonUsesDefaultPIDPath(t *testing.T) {
-	// Create config with empty PID path (should use default)
-	cfg := &config.Config{
-		Daemon: config.DaemonConfig{
-			AutoStart: true,
-			PIDPath:   "", // Empty means use default
-		},
-	}
+func TestEnsureDaemonUsesDefaults(t *testing.T) {
+	// Create paths with empty values (should use defaults)
+	paths := client.DaemonPaths{}
 
-	// Should use default PID path
-	err := maybeStartDaemon(cfg)
+	// Should use default paths
+	err := client.EnsureDaemon(paths)
 	// We just want to ensure it doesn't panic and handles defaults correctly
-	// Error is expected since daemon likely isn't running
+	// Error or success both acceptable depending on environment
 	if err != nil {
-		t.Logf("maybeStartDaemon() returned expected error: %v", err)
+		t.Logf("EnsureDaemon() returned error (expected in test environment): %v", err)
 	}
 }

@@ -68,6 +68,25 @@ func DefaultPIDPath() string {
 	return filepath.Join(xdg.DataHome, "sweep", "sweep.pid")
 }
 
+// DaemonPaths configures paths for daemon operations.
+// Empty fields use defaults.
+type DaemonPaths struct {
+	Binary string // Path to sweepd binary (auto-discovered if empty)
+	Socket string // Unix socket path
+	PID    string // PID file path
+}
+
+// withDefaults returns a copy with empty fields filled with defaults.
+func (p DaemonPaths) withDefaults() DaemonPaths {
+	if p.Socket == "" {
+		p.Socket = DefaultSocketPath()
+	}
+	if p.PID == "" {
+		p.PID = DefaultPIDPath()
+	}
+	return p
+}
+
 // Connect establishes a connection to the sweepd daemon.
 // Uses a default timeout of 5 seconds.
 func Connect(socketPath string) (*Client, error) {
@@ -296,70 +315,121 @@ func eventTypeToString(t sweepv1.FileEvent_EventType) string {
 	}
 }
 
+// EnsureDaemon ensures the daemon is running, starting it if necessary.
+// Idempotent: returns nil if daemon is already running.
+func EnsureDaemon(paths DaemonPaths) error {
+	return StartDaemon(paths)
+}
+
 // StartDaemon starts the sweepd daemon in the background.
-// Returns nil if the daemon started successfully.
-func StartDaemon() error {
-	pidPath := DefaultPIDPath()
+// Idempotent: returns nil if daemon is already running.
+func StartDaemon(paths DaemonPaths) error {
+	paths = paths.withDefaults()
 
-	// Check if already running
-	if IsDaemonRunning(pidPath) {
-		return fmt.Errorf("daemon is already running")
+	if IsDaemonRunning(paths.PID) {
+		return nil // Already running, nothing to do
 	}
 
-	// Find the sweepd binary
-	sweepdPath, err := findSweepdBinary()
+	binary, err := resolveBinary(paths.Binary)
 	if err != nil {
-		return fmt.Errorf("failed to find sweepd binary: %w", err)
+		return fmt.Errorf("find sweepd: %w", err)
 	}
 
-	// Start the daemon in the background using a context (required by linter)
-	// We use Background context since daemon should outlive this call
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, sweepdPath)
+	// Use exec.Command (not CommandContext) intentionally: daemon must outlive caller
+	cmd := exec.Command(binary) //nolint:gosec // binary path is validated
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start daemon: %w", err)
+		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	// Detach from parent process so daemon outlives caller
+	// Detach so daemon outlives caller
 	if cmd.Process != nil {
-		_ = cmd.Process.Release() // Intentionally ignored: we want detachment to proceed regardless
+		_ = cmd.Process.Release()
 	}
 
 	// Wait for socket to be ready
-	socketPath := DefaultSocketPath()
 	for range 50 {
 		time.Sleep(100 * time.Millisecond)
-		if _, err := os.Stat(socketPath); err == nil {
+		if _, err := os.Stat(paths.Socket); err == nil {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("daemon did not start within timeout")
+	return errors.New("daemon did not become ready within timeout")
 }
 
-// findSweepdBinary attempts to find the sweepd binary.
-func findSweepdBinary() (string, error) {
-	// First, try in the same directory as the current executable
-	execPath, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(execPath)
-		sweepdPath := filepath.Join(dir, "sweepd")
-		if _, err := os.Stat(sweepdPath); err == nil {
-			return sweepdPath, nil
+// StopDaemon stops the daemon gracefully via RPC.
+// Idempotent: returns nil if daemon is not running.
+func StopDaemon(paths DaemonPaths) error {
+	paths = paths.withDefaults()
+
+	if !IsDaemonRunning(paths.PID) {
+		return nil // Not running, nothing to do
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := ConnectWithContext(ctx, paths.Socket)
+	if err != nil {
+		return fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown daemon: %w", err)
+	}
+
+	// Wait for daemon to stop
+	for range 20 {
+		time.Sleep(250 * time.Millisecond)
+		if !IsDaemonRunning(paths.PID) {
+			return nil
 		}
 	}
 
-	// Try in PATH
-	sweepdPath, err := exec.LookPath("sweepd")
-	if err == nil {
-		return sweepdPath, nil
+	return errors.New("daemon did not stop within timeout")
+}
+
+// RestartDaemon stops and starts the daemon.
+func RestartDaemon(paths DaemonPaths) error {
+	if err := StopDaemon(paths); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
+	if err := StartDaemon(paths); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+	return nil
+}
+
+// resolveBinary finds the sweepd binary path.
+// Priority: configured path > same directory as executable > PATH
+func resolveBinary(configured string) (string, error) {
+	// Use configured path if provided
+	if configured != "" {
+		if _, err := os.Stat(configured); err != nil {
+			return "", fmt.Errorf("configured binary not found: %s", configured)
+		}
+		return configured, nil
 	}
 
-	return "", fmt.Errorf("sweepd not found in same directory as executable or in PATH")
+	// Try same directory as current executable
+	if execPath, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(execPath), "sweepd")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	// Try PATH
+	if path, err := exec.LookPath("sweepd"); err == nil {
+		return path, nil
+	}
+
+	return "", errors.New("sweepd not found")
 }
 
 // IsDaemonRunning checks if the daemon is running based on the PID file.

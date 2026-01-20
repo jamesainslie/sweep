@@ -30,6 +30,7 @@ type LoggingConfig struct {
 // DaemonConfig configures the background daemon.
 type DaemonConfig struct {
 	AutoStart  bool   `mapstructure:"auto_start"`
+	BinaryPath string `mapstructure:"binary_path"` // Path to sweepd binary (auto-discovered if empty)
 	SocketPath string `mapstructure:"socket_path"`
 	PIDPath    string `mapstructure:"pid_path"`
 }

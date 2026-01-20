@@ -4,6 +4,7 @@ package watcher
 import (
 	"context"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -105,6 +106,7 @@ func (w *Watcher) addWatch(path string) error {
 	}
 
 	if err := w.watcher.Add(path); err != nil {
+		log.Printf("[WATCHER] Failed to add watch for %s: %v", path, err)
 		return err
 	}
 

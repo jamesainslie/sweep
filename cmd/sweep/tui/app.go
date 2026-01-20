@@ -690,6 +690,12 @@ func (m Model) startLiveWatch() tea.Cmd {
 	minSize := m.options.MinSize
 	exclude := m.options.Exclude
 
+	// Resolve symlinks to match daemon's indexed paths
+	// (e.g., /Volumes/Development -> /Users/user/Development)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	return func() tea.Msg {
 		// Check if daemon is running
 		pidPath := client.DefaultPIDPath()

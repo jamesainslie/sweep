@@ -101,7 +101,7 @@ func (b *Broadcaster) Notify(path string, eventType EventType, size int64) {
 			select {
 			case sub.Events <- event:
 			default:
-				// Channel full, drop event
+				// Channel full, event dropped
 			}
 		}
 	}

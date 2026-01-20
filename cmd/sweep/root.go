@@ -1,12 +1,18 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
+	"github.com/jamesainslie/sweep/pkg/sweep/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -102,8 +108,135 @@ func initConfig() {
 }
 
 // Execute runs the root command.
+// It performs bootstrap initialization before running commands.
 func Execute() error {
+	if err := bootstrap(); err != nil {
+		fmt.Fprintf(os.Stderr, "Bootstrap warning: %v\n", err)
+		// Continue anyway - bootstrap errors are not fatal
+	}
+	defer func() {
+		_ = logging.Close()
+	}()
 	return rootCmd.Execute()
+}
+
+// bootstrap performs application initialization.
+// It ensures XDG directories exist, initializes logging, and optionally starts the daemon.
+func bootstrap() error {
+	// Ensure XDG directories
+	if err := config.EnsureConfigDir(); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := config.EnsureDataDir(); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+	if err := config.EnsureStateDir(); err != nil {
+		return fmt.Errorf("creating state dir: %w", err)
+	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	// Initialize logging
+	logPath := cfg.Logging.Path
+	if logPath == "" {
+		logPath = config.DefaultLogPath()
+	}
+
+	// Override log level if verbose flag is set
+	logLevel := cfg.Logging.Level
+	if viper.GetBool("verbose") {
+		logLevel = "debug"
+	}
+
+	logCfg := logging.Config{
+		Level:      logLevel,
+		Path:       logPath,
+		Rotation:   parseRotationConfig(cfg.Logging.Rotation),
+		Components: cfg.Logging.Components,
+	}
+	if err := logging.Init(logCfg); err != nil {
+		return fmt.Errorf("initializing logging: %w", err)
+	}
+
+	log := logging.Get("client")
+	log.Debug("sweep starting", "version", "0.1.0")
+
+	// Auto-start daemon if configured and not bypassed
+	if cfg.Daemon.AutoStart && !viper.GetBool("no_daemon") {
+		if err := maybeStartDaemon(cfg); err != nil {
+			log.Warn("failed to auto-start daemon", "error", err)
+			// Continue anyway - not fatal
+		}
+	}
+
+	return nil
+}
+
+// parseRotationConfig converts config.RotationConfig to logging.RotationConfig.
+func parseRotationConfig(cfg config.RotationConfig) logging.RotationConfig {
+	// Parse max_size string to bytes
+	maxSize, err := types.ParseSize(cfg.MaxSize)
+	if err != nil || maxSize == 0 {
+		maxSize = 10 * 1024 * 1024 // 10MB default
+	}
+	return logging.RotationConfig{
+		MaxSize:    maxSize,
+		MaxAge:     cfg.MaxAge,
+		MaxBackups: cfg.MaxBackups,
+		Daily:      cfg.Daily,
+	}
+}
+
+// maybeStartDaemon starts the daemon if it's not already running.
+func maybeStartDaemon(cfg *config.Config) error {
+	pidPath := cfg.Daemon.PIDPath
+	if pidPath == "" {
+		pidPath = config.DefaultPIDPath()
+	}
+
+	if client.IsDaemonRunning(pidPath) {
+		logging.Get("client").Debug("daemon already running")
+		return nil
+	}
+
+	// Find sweepd binary (same directory as sweep, or in PATH)
+	sweepd, err := exec.LookPath("sweepd")
+	if err != nil {
+		// Try same directory as sweep
+		execPath, execErr := os.Executable()
+		if execErr != nil {
+			return fmt.Errorf("finding sweepd: %w", err)
+		}
+		sweepd = filepath.Join(filepath.Dir(execPath), "sweepd")
+		if _, statErr := os.Stat(sweepd); statErr != nil {
+			return errors.New("sweepd not found")
+		}
+	}
+
+	// Start daemon in background
+	cmd := exec.Command(sweepd)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // Detach from parent process group
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting daemon: %w", err)
+	}
+
+	logging.Get("client").Info("started daemon", "pid", cmd.Process.Pid)
+
+	// Detach from parent process so daemon outlives caller
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+
+	return nil
 }
 
 // getVerbose returns true if verbose mode is enabled.
@@ -116,21 +249,27 @@ func getQuiet() bool {
 	return viper.GetBool("quiet")
 }
 
-// printVerbose prints a message if verbose mode is enabled.
+// printVerbose logs a debug message and prints if verbose mode is enabled.
 func printVerbose(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	logging.Get("client").Debug(msg)
 	if getVerbose() && !getQuiet() {
-		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "[DEBUG] %s\n", msg)
 	}
 }
 
-// printInfo prints a message if quiet mode is not enabled.
+// printInfo logs an info message and prints if quiet mode is not enabled.
 func printInfo(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	logging.Get("client").Info(msg)
 	if !getQuiet() {
-		fmt.Printf(format+"\n", args...)
+		fmt.Printf("%s\n", msg)
 	}
 }
 
-// printError prints an error message to stderr.
+// printError logs an error message and prints to stderr.
 func printError(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
+	msg := fmt.Sprintf(format, args...)
+	logging.Get("client").Error(msg)
+	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
 }

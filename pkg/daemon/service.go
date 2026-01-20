@@ -15,6 +15,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 )
 
 // indexState tracks the state of an index operation.
@@ -133,10 +134,12 @@ func (s *Service) GetIndexStatus(_ context.Context, req *sweepv1.GetIndexStatusR
 // TriggerIndex starts indexing a path.
 func (s *Service) TriggerIndex(_ context.Context, req *sweepv1.TriggerIndexRequest) (*sweepv1.TriggerIndexResponse, error) {
 	reqPath := req.GetPath()
+	log := logging.Get("daemon")
 
 	s.indexMu.Lock()
 	if state, exists := s.indexStates[reqPath]; exists && state.state == sweepv1.IndexState_INDEX_STATE_INDEXING {
 		s.indexMu.Unlock()
+		log.Debug("index already in progress", "path", reqPath)
 		return &sweepv1.TriggerIndexResponse{
 			Started: false,
 			Message: "already indexing",
@@ -145,6 +148,7 @@ func (s *Service) TriggerIndex(_ context.Context, req *sweepv1.TriggerIndexReque
 
 	// Clear existing if force
 	if req.GetForce() {
+		log.Info("force re-index requested, clearing existing data", "path", reqPath)
 		_ = s.store.DeletePrefix(reqPath)
 	}
 
@@ -152,6 +156,8 @@ func (s *Service) TriggerIndex(_ context.Context, req *sweepv1.TriggerIndexReque
 		state: sweepv1.IndexState_INDEX_STATE_INDEXING,
 	}
 	s.indexMu.Unlock()
+
+	log.Info("starting index", "path", reqPath)
 
 	// Start indexing in background
 	// We intentionally use a fresh context because indexing should continue
@@ -166,6 +172,8 @@ func (s *Service) TriggerIndex(_ context.Context, req *sweepv1.TriggerIndexReque
 
 // runIndexing performs the indexing operation in the background.
 func (s *Service) runIndexing(ctx context.Context, path string) {
+	log := logging.Get("indexer")
+
 	progress := func(p indexer.Progress) {
 		s.indexMu.Lock()
 		if state, exists := s.indexStates[path]; exists {
@@ -180,10 +188,12 @@ func (s *Service) runIndexing(ctx context.Context, path string) {
 
 	s.indexMu.Lock()
 	if err != nil {
+		log.Error("indexing failed", "path", path, "error", err)
 		s.indexStates[path] = &indexState{
 			state: sweepv1.IndexState_INDEX_STATE_STALE,
 		}
 	} else {
+		log.Info("indexing complete", "path", path, "files", result.FilesIndexed, "dirs", result.DirsIndexed)
 		s.indexStates[path] = &indexState{
 			state:    sweepv1.IndexState_INDEX_STATE_READY,
 			progress: 1.0,
@@ -192,7 +202,9 @@ func (s *Service) runIndexing(ctx context.Context, path string) {
 		}
 		// Start watching the indexed path for changes
 		if s.watcher != nil {
-			_ = s.watcher.Watch(path)
+			if watchErr := s.watcher.Watch(path); watchErr != nil {
+				log.Warn("failed to start watching indexed path", "path", path, "error", watchErr)
+			}
 		}
 	}
 	s.indexMu.Unlock()
@@ -273,16 +285,19 @@ func (s *Service) Shutdown(_ context.Context, _ *sweepv1.ShutdownRequest) (*swee
 // ClearCache clears the cache for a path.
 func (s *Service) ClearCache(_ context.Context, req *sweepv1.ClearCacheRequest) (*sweepv1.ClearCacheResponse, error) {
 	reqPath := req.GetPath()
+	log := logging.Get("daemon")
 	var count int64
 
 	if reqPath == "" {
 		files, dirs, _ := s.store.CountEntries("")
 		count = files + dirs
 		_ = s.store.DeletePrefix("")
+		log.Info("cleared all cache", "entries", count)
 	} else {
 		files, dirs, _ := s.store.CountEntries(reqPath)
 		count = files + dirs
 		_ = s.store.DeletePrefix(reqPath)
+		log.Info("cleared cache", "path", reqPath, "entries", count)
 	}
 
 	// Stop watching the cleared path

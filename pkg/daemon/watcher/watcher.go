@@ -4,7 +4,6 @@ package watcher
 import (
 	"context"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,17 +11,18 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 )
 
 // Watcher watches directories for filesystem changes and updates the store.
 type Watcher struct {
-	store              *store.Store
-	watcher            *fsnotify.Watcher
-	paths              map[string]bool
-	mu                 sync.RWMutex
-	closed             bool
-	broadcaster        *broadcaster.Broadcaster
-	minLargeFileSize   int64 // Threshold for large files index
+	store            *store.Store
+	watcher          *fsnotify.Watcher
+	paths            map[string]bool
+	mu               sync.RWMutex
+	closed           bool
+	broadcaster      *broadcaster.Broadcaster
+	minLargeFileSize int64 // Threshold for large files index
 }
 
 // New creates a new Watcher.
@@ -106,7 +106,7 @@ func (w *Watcher) addWatch(path string) error {
 	}
 
 	if err := w.watcher.Add(path); err != nil {
-		log.Printf("[WATCHER] Failed to add watch for %s: %v", path, err)
+		logging.Get("watcher").Warn("failed to add watch", "path", path, "error", err)
 		return err
 	}
 
@@ -152,11 +152,11 @@ func (w *Watcher) Run(ctx context.Context, onChange func(path string, op fsnotif
 
 			w.handleEvent(event, onChange)
 
-		case _, ok := <-w.watcher.Errors:
+		case err, ok := <-w.watcher.Errors:
 			if !ok {
 				return
 			}
-			// Log errors in production, for now just continue
+			logging.Get("watcher").Error("watcher error", "error", err)
 		}
 	}
 }

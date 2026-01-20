@@ -7,8 +7,32 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/adrg/xdg"
 	"github.com/spf13/viper"
 )
+
+// RotationConfig configures log file rotation.
+type RotationConfig struct {
+	MaxSize    string `mapstructure:"max_size"`
+	MaxAge     int    `mapstructure:"max_age"`
+	MaxBackups int    `mapstructure:"max_backups"`
+	Daily      bool   `mapstructure:"daily"`
+}
+
+// LoggingConfig configures application logging.
+type LoggingConfig struct {
+	Level      string            `mapstructure:"level"`
+	Path       string            `mapstructure:"path"`
+	Rotation   RotationConfig    `mapstructure:"rotation"`
+	Components map[string]string `mapstructure:"components"`
+}
+
+// DaemonConfig configures the background daemon.
+type DaemonConfig struct {
+	AutoStart  bool   `mapstructure:"auto_start"`
+	SocketPath string `mapstructure:"socket_path"`
+	PIDPath    string `mapstructure:"pid_path"`
+}
 
 // Config represents the application configuration.
 type Config struct {
@@ -24,6 +48,8 @@ type Config struct {
 		Path          string `mapstructure:"path"`
 		RetentionDays int    `mapstructure:"retention_days"`
 	} `mapstructure:"manifest"`
+	Logging LoggingConfig `mapstructure:"logging"`
+	Daemon  DaemonConfig  `mapstructure:"daemon"`
 }
 
 // Load loads configuration from file and environment variables.
@@ -66,6 +92,25 @@ func Load() (*Config, error) {
 
 	// Set default manifest path (needs home dir expansion)
 	v.SetDefault("manifest.path", filepath.Join(homeDir, ".config", "sweep", ".manifest"))
+
+	// Logging defaults
+	v.SetDefault("logging.level", "info")
+	v.SetDefault("logging.path", "") // Empty means use DefaultLogPath
+	v.SetDefault("logging.rotation.max_size", "10MB")
+	v.SetDefault("logging.rotation.max_age", 30)
+	v.SetDefault("logging.rotation.max_backups", 5)
+	v.SetDefault("logging.rotation.daily", true)
+	v.SetDefault("logging.components", map[string]string{
+		"daemon":  "info",
+		"watcher": "warn",
+		"scanner": "info",
+		"tui":     "info",
+	})
+
+	// Daemon defaults
+	v.SetDefault("daemon.auto_start", true)
+	v.SetDefault("daemon.socket_path", "") // Empty means use default XDG path
+	v.SetDefault("daemon.pid_path", "")    // Empty means use default XDG path
 
 	// Read config file (ignore if not found)
 	if err := v.ReadInConfig(); err != nil {
@@ -193,6 +238,34 @@ manifest:
   enabled: true
   path: %s
   retention_days: %d
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: info
+  # Log file path (empty means use default: $XDG_STATE_HOME/sweep/sweep.log)
+  path: ""
+  # Log rotation settings
+  rotation:
+    max_size: 10MB
+    max_age: 30       # days
+    max_backups: 5
+    daily: true
+  # Per-component log levels
+  components:
+    daemon: info
+    watcher: warn
+    scanner: info
+    tui: info
+
+# Daemon configuration
+daemon:
+  # Automatically start daemon when running sweep commands
+  auto_start: true
+  # Unix socket path (empty means use default: $XDG_DATA_HOME/sweep/sweep.sock)
+  socket_path: ""
+  # PID file path (empty means use default: $XDG_DATA_HOME/sweep/sweep.pid)
+  pid_path: ""
 `, DefaultMinSize, DefaultPath, DefaultDirWorkers, DefaultFileWorkers, manifestDir, DefaultRetentionDays)
 
 	if err := os.WriteFile(configPath, []byte(defaultConfig), 0o644); err != nil {
@@ -214,4 +287,63 @@ func ExpandPath(path string) (string, error) {
 	}
 
 	return filepath.Join(homeDir, path[1:]), nil
+}
+
+// DataDir returns $XDG_DATA_HOME/sweep/ for database, socket, and pid files.
+func DataDir() string {
+	return filepath.Join(xdg.DataHome, "sweep")
+}
+
+// StateDir returns $XDG_STATE_HOME/sweep/ for log files.
+func StateDir() string {
+	return filepath.Join(xdg.StateHome, "sweep")
+}
+
+// CacheDir returns $XDG_CACHE_HOME/sweep/ (reserved for future use).
+func CacheDir() string {
+	return filepath.Join(xdg.CacheHome, "sweep")
+}
+
+// DefaultSocketPath returns the default Unix socket path.
+func DefaultSocketPath() string {
+	return filepath.Join(DataDir(), "sweep.sock")
+}
+
+// DefaultPIDPath returns the default PID file path.
+func DefaultPIDPath() string {
+	return filepath.Join(DataDir(), "sweep.pid")
+}
+
+// DefaultDBPath returns the default database path.
+func DefaultDBPath() string {
+	return filepath.Join(DataDir(), "sweep.db")
+}
+
+// DefaultLogPath returns the default log file path.
+func DefaultLogPath() string {
+	return filepath.Join(StateDir(), "sweep.log")
+}
+
+// EnsureDataDir creates the data directory if it doesn't exist.
+func EnsureDataDir() error {
+	if err := os.MkdirAll(DataDir(), 0o755); err != nil {
+		return fmt.Errorf("creating data directory: %w", err)
+	}
+	return nil
+}
+
+// EnsureStateDir creates the state directory if it doesn't exist.
+func EnsureStateDir() error {
+	if err := os.MkdirAll(StateDir(), 0o755); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
+	}
+	return nil
+}
+
+// EnsureCacheDir creates the cache directory if it doesn't exist.
+func EnsureCacheDir() error {
+	if err := os.MkdirAll(CacheDir(), 0o755); err != nil {
+		return fmt.Errorf("creating cache directory: %w", err)
+	}
+	return nil
 }

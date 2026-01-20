@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
+	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 )
 
@@ -68,27 +71,130 @@ func (s *Service) SetWatcher(w *watcher.Watcher) {
 	s.watcher = w
 }
 
-// GetLargeFiles streams large files matching the criteria.
-func (s *Service) GetLargeFiles(req *sweepv1.GetLargeFilesRequest, stream grpc.ServerStreamingServer[sweepv1.FileInfo]) error {
+// requestToFilter converts a GetLargeFilesRequest to a filter.Filter.
+// This allows the daemon to apply server-side filtering using the filter package.
+func requestToFilter(req *sweepv1.GetLargeFilesRequest) *filter.Filter {
+	var opts []filter.Option
+
+	// Size filter
+	if req.GetMinSize() > 0 {
+		opts = append(opts, filter.WithMinSize(req.GetMinSize()))
+	}
+
+	// Limit
 	limit := int(req.GetLimit())
 	if limit == 0 {
 		limit = 1000 // Default limit
 	}
+	opts = append(opts, filter.WithLimit(limit))
 
+	// Pattern filters
+	if len(req.GetInclude()) > 0 {
+		opts = append(opts, filter.WithInclude(req.GetInclude()...))
+	}
+	if len(req.GetExclude()) > 0 {
+		opts = append(opts, filter.WithExclude(req.GetExclude()...))
+	}
+
+	// Extensions or type groups (type groups take precedence if both specified)
+	if len(req.GetTypeGroups()) > 0 {
+		opts = append(opts, filter.WithTypeGroups(req.GetTypeGroups()...))
+	} else if len(req.GetExtensions()) > 0 {
+		opts = append(opts, filter.WithExtensions(req.GetExtensions()...))
+	}
+
+	// Age filters
+	if req.GetOlderThanSeconds() > 0 {
+		opts = append(opts, filter.WithOlderThan(time.Duration(req.GetOlderThanSeconds())*time.Second))
+	}
+	if req.GetNewerThanSeconds() > 0 {
+		opts = append(opts, filter.WithNewerThan(time.Duration(req.GetNewerThanSeconds())*time.Second))
+	}
+
+	// Depth control
+	if req.GetMaxDepth() > 0 {
+		opts = append(opts, filter.WithMaxDepth(int(req.GetMaxDepth())))
+	}
+
+	// Sorting
+	sortField := protoSortToFilter(req.GetSortBy())
+	opts = append(opts, filter.WithSortBy(sortField))
+	opts = append(opts, filter.WithSortDescending(req.GetSortDescending()))
+
+	return filter.New(opts...)
+}
+
+// protoSortToFilter converts a proto SortField to filter.SortField.
+func protoSortToFilter(s sweepv1.SortField) filter.SortField {
+	switch s {
+	case sweepv1.SortField_SORT_SIZE:
+		return filter.SortSize
+	case sweepv1.SortField_SORT_MOD_TIME:
+		return filter.SortAge
+	case sweepv1.SortField_SORT_PATH:
+		return filter.SortPath
+	default:
+		return filter.SortSize
+	}
+}
+
+// storeEntryToFilterInfo converts a store.Entry to a filter.FileInfo.
+func storeEntryToFilterInfo(e *store.Entry, root string) filter.FileInfo {
+	// Calculate depth relative to root
+	relPath := strings.TrimPrefix(e.Path, root)
+	relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+	depth := 0
+	if relPath != "" {
+		depth = strings.Count(relPath, string(filepath.Separator)) + 1
+	}
+
+	return filter.FileInfo{
+		Path:    e.Path,
+		Name:    filepath.Base(e.Path),
+		Dir:     filepath.Dir(e.Path),
+		Ext:     strings.ToLower(filepath.Ext(e.Path)),
+		Size:    e.Size,
+		ModTime: time.Unix(e.ModTime, 0),
+		Depth:   depth,
+	}
+}
+
+// GetLargeFiles streams large files matching the criteria.
+func (s *Service) GetLargeFiles(req *sweepv1.GetLargeFilesRequest, stream grpc.ServerStreamingServer[sweepv1.FileInfo]) error {
 	root := req.GetPath()
 	minSize := req.GetMinSize()
 
+	// Build the filter from request
+	f := requestToFilter(req)
+
+	// Query a larger set from the store to allow for filtering
+	// We fetch more than the limit to ensure we have enough after filtering
+	fetchLimit := f.Limit * 10
+	if fetchLimit < 10000 {
+		fetchLimit = 10000 // Minimum fetch to ensure good filtering coverage
+	}
+
 	// Query the large files index (populated during indexing or migration)
-	files, err := s.store.GetLargeFiles(root, minSize, limit)
+	entries, err := s.store.GetLargeFiles(root, minSize, fetchLimit)
 	if err != nil {
 		return err
 	}
 
-	for _, f := range files {
+	// Convert store entries to filter.FileInfo
+	fileInfos := make([]filter.FileInfo, 0, len(entries))
+	for _, e := range entries {
+		fileInfos = append(fileInfos, storeEntryToFilterInfo(e, root))
+	}
+
+	// Apply the filter (match, sort, limit)
+	filtered := f.Apply(fileInfos)
+
+	// Stream the results
+	for _, fi := range filtered {
 		info := &sweepv1.FileInfo{
-			Path:    f.Path,
-			Size:    f.Size,
-			ModTime: f.ModTime,
+			Path:    fi.Path,
+			Size:    fi.Size,
+			ModTime: fi.ModTime.Unix(),
 		}
 		if err := stream.Send(info); err != nil {
 			return err

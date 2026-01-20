@@ -36,6 +36,26 @@ message GetLargeFilesRequest {
   int64 min_size = 2;
   repeated string exclude = 3;
   int32 limit = 4;
+
+  // Pattern matching (include patterns - files must match at least one if specified)
+  repeated string include = 5;
+  // File extensions to include (e.g., ".mp4", ".mkv")
+  repeated string extensions = 6;
+  // Type groups to include (e.g., "video", "audio", "archive")
+  repeated string type_groups = 7;
+
+  // Age filtering
+  // Only include files older than this many seconds
+  int64 older_than_seconds = 8;
+  // Only include files newer than this many seconds
+  int64 newer_than_seconds = 9;
+
+  // Depth control (0 means unlimited)
+  int32 max_depth = 10;
+
+  // Sorting
+  SortField sort_by = 11;
+  bool sort_descending = 12;
 }
 
 message FileInfo {
@@ -68,6 +88,16 @@ enum IndexState {
   INDEX_STATE_INDEXING = 2;
   INDEX_STATE_READY = 3;
   INDEX_STATE_STALE = 4;
+}
+
+// SortField specifies the field to sort files by.
+enum SortField {
+  // Sort by file size in bytes.
+  SORT_SIZE = 0;
+  // Sort by modification time (age).
+  SORT_MOD_TIME = 1;
+  // Sort by file path alphabetically.
+  SORT_PATH = 2;
 }
 
 message TriggerIndexRequest {

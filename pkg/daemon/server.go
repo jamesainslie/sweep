@@ -49,6 +49,9 @@ type Server struct {
 	migrationMu     sync.RWMutex
 	migrationStatus MigrationStatus
 	migrationCancel context.CancelFunc
+
+	// Shutdown signaling
+	shutdownChan chan struct{}
 }
 
 // NewServer creates a new daemon server.
@@ -105,21 +108,26 @@ func NewServer(cfg Config) (*Server, error) {
 	// Create context for watcher goroutine
 	watcherCtx, watcherStop := context.WithCancel(context.Background())
 
+	// Create shutdown channel
+	shutdownChan := make(chan struct{}, 1)
+
 	// Create service with broadcaster and optional config
 	svc := NewServiceWithBroadcaster(st, bc)
 	svc.indexer.MinLargeFileSize = largeFileThreshold
 	svc.SetWatcher(w)
+	svc.SetShutdownChan(shutdownChan)
 
 	srv := &Server{
-		cfg:         cfg,
-		grpc:        grpc.NewServer(),
-		listener:    listener,
-		store:       st,
-		service:     svc,
-		broadcaster: bc,
-		watcher:     w,
-		watcherCtx:  watcherCtx,
-		watcherStop: watcherStop,
+		cfg:          cfg,
+		grpc:         grpc.NewServer(),
+		listener:     listener,
+		store:        st,
+		service:      svc,
+		broadcaster:  bc,
+		watcher:      w,
+		watcherCtx:   watcherCtx,
+		watcherStop:  watcherStop,
+		shutdownChan: shutdownChan,
 	}
 
 	// Register gRPC service
@@ -145,6 +153,11 @@ func NewServer(cfg Config) (*Server, error) {
 // Serve starts the gRPC server. Blocks until stopped.
 func (s *Server) Serve() error {
 	return s.grpc.Serve(s.listener)
+}
+
+// ShutdownChan returns a channel that receives when shutdown is requested via RPC.
+func (s *Server) ShutdownChan() <-chan struct{} {
+	return s.shutdownChan
 }
 
 // Close stops the server and cleans up.

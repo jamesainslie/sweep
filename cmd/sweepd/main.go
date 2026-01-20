@@ -100,13 +100,17 @@ func main() {
 		}
 	}()
 
-	// Handle shutdown signals
+	// Handle shutdown signals and RPC shutdown requests
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-sigChan
-		log.Info("shutting down")
+		select {
+		case <-sigChan:
+			log.Info("shutting down (signal)")
+		case <-srv.ShutdownChan():
+			log.Info("shutting down (RPC request)")
+		}
 		if err := srv.Close(); err != nil {
 			log.Warn("error during shutdown", "error", err)
 		}

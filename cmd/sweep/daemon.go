@@ -35,6 +35,13 @@ var daemonStopCmd = &cobra.Command{
 	RunE:  runDaemonStop,
 }
 
+var daemonRestartCmd = &cobra.Command{
+	Use:   "restart",
+	Short: "Restart the sweepd daemon",
+	Long:  `Stop and start the sweepd daemon.`,
+	RunE:  runDaemonRestart,
+}
+
 var daemonStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status",
@@ -62,6 +69,7 @@ func init() {
 	rootCmd.AddCommand(daemonCmd)
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
+	daemonCmd.AddCommand(daemonRestartCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonIndexCmd)
 	daemonCmd.AddCommand(daemonClearCmd)
@@ -71,9 +79,12 @@ func init() {
 }
 
 func runDaemonStart(_ *cobra.Command, _ []string) error {
+	printVerbose("starting daemon...")
 	if err := client.StartDaemon(); err != nil {
+		printVerbose("start failed: %v", err)
 		return err
 	}
+	printVerbose("daemon started successfully")
 	printInfo("Daemon started")
 	return nil
 }
@@ -82,35 +93,63 @@ func runDaemonStop(_ *cobra.Command, _ []string) error {
 	pidPath := client.DefaultPIDPath()
 	socketPath := client.DefaultSocketPath()
 
+	printVerbose("checking PID file: %s", pidPath)
+	printVerbose("socket path: %s", socketPath)
+
 	// Check if running
 	if !client.IsDaemonRunning(pidPath) {
+		printVerbose("daemon not running (PID check failed)")
 		return errors.New("daemon is not running")
 	}
+	printVerbose("daemon is running")
 
 	// Connect and send shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	printVerbose("connecting to daemon...")
 	daemonClient, err := client.ConnectWithContext(ctx, socketPath)
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
 	defer daemonClient.Close()
+	printVerbose("connected, sending shutdown request...")
 
 	if err := daemonClient.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to stop daemon: %w", err)
 	}
+	printVerbose("shutdown request sent, waiting for daemon to stop...")
 
 	// Wait for the daemon to stop
-	for range 20 {
+	for i := range 20 {
 		time.Sleep(250 * time.Millisecond)
 		if !client.IsDaemonRunning(pidPath) {
+			printVerbose("daemon stopped after %d checks", i+1)
 			printInfo("Daemon stopped")
 			return nil
 		}
+		printVerbose("still running (check %d/20)", i+1)
 	}
 
 	return errors.New("daemon did not stop in time")
+}
+
+func runDaemonRestart(cmd *cobra.Command, args []string) error {
+	pidPath := client.DefaultPIDPath()
+
+	// Stop if running
+	if client.IsDaemonRunning(pidPath) {
+		if err := runDaemonStop(cmd, args); err != nil {
+			return fmt.Errorf("failed to stop daemon: %w", err)
+		}
+	}
+
+	// Start daemon
+	if err := runDaemonStart(cmd, args); err != nil {
+		return fmt.Errorf("failed to start daemon: %w", err)
+	}
+
+	return nil
 }
 
 func runDaemonStatus(_ *cobra.Command, _ []string) error {

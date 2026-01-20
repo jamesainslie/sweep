@@ -43,6 +43,9 @@ type Service struct {
 	// Track indexing state per path
 	indexMu     sync.RWMutex
 	indexStates map[string]*indexState
+
+	// Shutdown signaling
+	shutdownChan chan<- struct{}
 }
 
 // NewService creates a new gRPC service.
@@ -69,6 +72,11 @@ func NewServiceWithBroadcaster(s *store.Store, b *broadcaster.Broadcaster) *Serv
 // SetWatcher sets the filesystem watcher for the service.
 func (s *Service) SetWatcher(w *watcher.Watcher) {
 	s.watcher = w
+}
+
+// SetShutdownChan sets the channel to signal shutdown requests.
+func (s *Service) SetShutdownChan(ch chan<- struct{}) {
+	s.shutdownChan = ch
 }
 
 // requestToFilter converts a GetLargeFilesRequest to a filter.Filter.
@@ -385,6 +393,16 @@ func (s *Service) GetDaemonStatus(_ context.Context, _ *sweepv1.GetDaemonStatusR
 
 // Shutdown gracefully shuts down the daemon.
 func (s *Service) Shutdown(_ context.Context, _ *sweepv1.ShutdownRequest) (*sweepv1.ShutdownResponse, error) {
+	log := logging.Get("daemon")
+	log.Info("shutdown requested via RPC")
+
+	// Signal shutdown in a goroutine to avoid blocking the response
+	if s.shutdownChan != nil {
+		go func() {
+			s.shutdownChan <- struct{}{}
+		}()
+	}
+
 	return &sweepv1.ShutdownResponse{Success: true}, nil
 }
 

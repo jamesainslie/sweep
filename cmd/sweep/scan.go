@@ -153,6 +153,11 @@ func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 	dryRun := viper.GetBool("dry_run")
 	noDaemon := viper.GetBool("no_daemon")
 
+	// Re-initialize logging for TUI mode (enables log buffer, disables console)
+	if err := initTUILogging(); err != nil {
+		return fmt.Errorf("failed to initialize TUI logging: %w", err)
+	}
+
 	// Build filter from CLI flags
 	f, err := buildFilter()
 	if err != nil {

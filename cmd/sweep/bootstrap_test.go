@@ -98,15 +98,15 @@ func TestParseRotationConfig(t *testing.T) {
 	}
 }
 
-func TestBootstrapEnsuresDirectories(t *testing.T) {
+func TestInitializeLoggingEnsuresDirectories(t *testing.T) {
 	// Note: XDG paths are cached at package init time, so we cannot override
-	// them with environment variables. Instead, we verify that bootstrap
+	// them with environment variables. Instead, we verify that initializeLogging
 	// creates the directories at the actual XDG paths.
 
-	// Run bootstrap
-	err := bootstrap()
+	// Run initializeLogging (the PersistentPreRunE hook)
+	err := initializeLogging(nil, nil)
 	if err != nil {
-		t.Fatalf("bootstrap() returned error: %v", err)
+		t.Fatalf("initializeLogging() returned error: %v", err)
 	}
 
 	// Verify directories were created using the config package's path functions

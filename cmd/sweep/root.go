@@ -37,8 +37,10 @@ Examples:
   sweep --older-than 30d .   # Find files older than 30 days
   sweep config show          # Show configuration
   sweep history              # View operation history`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runScan,
+		Args:              cobra.MaximumNArgs(1),
+		SilenceUsage:      true, // Don't show usage on runtime errors
+		PersistentPreRunE: initializeLogging,
+		RunE:              runScan,
 	}
 )
 
@@ -147,21 +149,17 @@ func initConfig() {
 }
 
 // Execute runs the root command.
-// It performs bootstrap initialization before running commands.
+// Logging is initialized in PersistentPreRunE after flag parsing.
 func Execute() error {
-	if err := bootstrap(); err != nil {
-		fmt.Fprintf(os.Stderr, "Bootstrap warning: %v\n", err)
-		// Continue anyway - bootstrap errors are not fatal
-	}
 	defer func() {
 		_ = logging.Close()
 	}()
 	return rootCmd.Execute()
 }
 
-// bootstrap performs application initialization.
-// It ensures XDG directories exist, initializes logging, and optionally starts the daemon.
-func bootstrap() error {
+// initializeLogging is called by PersistentPreRunE after flags are parsed.
+// This ensures verbose flag is available when configuring console output.
+func initializeLogging(_ *cobra.Command, _ []string) error {
 	// Ensure XDG directories
 	if err := config.EnsureConfigDir(); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
@@ -173,30 +171,18 @@ func bootstrap() error {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
 
-	// Load configuration
-	cfg, err := config.Load()
+	// Build logging configuration
+	logCfg, cfg, err := buildLoggingConfig()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
 
-	// Initialize logging
-	logPath := cfg.Logging.Path
-	if logPath == "" {
-		logPath = config.DefaultLogPath()
-	}
-
-	// Override log level if verbose flag is set
-	logLevel := cfg.Logging.Level
+	// Configure console output for verbose mode (non-TUI)
+	// TUI mode will re-initialize with TUIMode: true
 	if viper.GetBool("verbose") {
-		logLevel = "debug"
+		logCfg.ConsoleLevel = "debug"
 	}
 
-	logCfg := logging.Config{
-		Level:      logLevel,
-		Path:       logPath,
-		Rotation:   parseRotationConfig(cfg.Logging.Rotation),
-		Components: cfg.Logging.Components,
-	}
 	if err := logging.Init(logCfg); err != nil {
 		return fmt.Errorf("initializing logging: %w", err)
 	}
@@ -228,6 +214,35 @@ func parseRotationConfig(cfg config.RotationConfig) logging.RotationConfig {
 		MaxBackups: cfg.MaxBackups,
 		Daily:      cfg.Daily,
 	}
+}
+
+// buildLoggingConfig builds a logging config from the application config.
+// It handles verbose flag override and default path.
+// Returns both the logging config and the full application config.
+func buildLoggingConfig() (logging.Config, *config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return logging.Config{}, nil, fmt.Errorf("loading config: %w", err)
+	}
+
+	logPath := cfg.Logging.Path
+	if logPath == "" {
+		logPath = config.DefaultLogPath()
+	}
+
+	logLevel := cfg.Logging.Level
+	if viper.GetBool("verbose") {
+		logLevel = "debug"
+	}
+
+	logCfg := logging.Config{
+		Level:      logLevel,
+		Path:       logPath,
+		Rotation:   parseRotationConfig(cfg.Logging.Rotation),
+		Components: cfg.Logging.Components,
+	}
+
+	return logCfg, cfg, nil
 }
 
 // maybeStartDaemon starts the daemon if it's not already running.
@@ -278,9 +293,15 @@ func maybeStartDaemon(cfg *config.Config) error {
 	return nil
 }
 
-// getVerbose returns true if verbose mode is enabled.
-func getVerbose() bool {
-	return viper.GetBool("verbose")
+// initTUILogging re-initializes logging for TUI mode.
+// This enables the log buffer for the TUI log panel and disables console output.
+func initTUILogging() error {
+	logCfg, _, err := buildLoggingConfig()
+	if err != nil {
+		return err
+	}
+	logCfg.TUIMode = true // Enable TUI mode (log buffer, no console)
+	return logging.Init(logCfg)
 }
 
 // getQuiet returns true if quiet mode is enabled.
@@ -288,25 +309,26 @@ func getQuiet() bool {
 	return viper.GetBool("quiet")
 }
 
-// printVerbose logs a debug message and prints if verbose mode is enabled.
+// printVerbose logs a debug message. Console output is handled by the logger
+// when ConsoleLevel is set (via -v flag).
+// Deprecated: prefer using logging.Get("client").Debug() with structured key-value pairs.
 func printVerbose(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	logging.Get("client").Debug(msg)
-	if getVerbose() && !getQuiet() {
-		fmt.Fprintf(os.Stderr, "[DEBUG] %s\n", msg)
-	}
 }
 
-// printInfo logs an info message and prints if quiet mode is not enabled.
+// printInfo prints a user-facing info message and logs it.
+// This is for UI output that should always be shown to the user (unless quiet).
 func printInfo(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	logging.Get("client").Info(msg)
 	if !getQuiet() {
-		fmt.Printf("%s\n", msg)
+		fmt.Println(msg)
 	}
 }
 
-// printError logs an error message and prints to stderr.
+// printError prints a user-facing error message and logs it.
+// Errors are always shown regardless of quiet mode.
 func printError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	logging.Get("client").Error(msg)

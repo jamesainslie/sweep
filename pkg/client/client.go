@@ -4,6 +4,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -336,6 +337,12 @@ func StartDaemon(paths DaemonPaths) error {
 		return fmt.Errorf("find sweepd: %w", err)
 	}
 
+	// Derive status path from socket path
+	statusPath := strings.TrimSuffix(paths.Socket, ".sock") + ".status"
+
+	// Clean up stale status file before starting
+	_ = os.Remove(statusPath)
+
 	// Use exec.Command (not CommandContext) intentionally: daemon must outlive caller
 	cmd := exec.Command(binary) //nolint:gosec // binary path is validated
 	cmd.Stdout = nil
@@ -351,11 +358,23 @@ func StartDaemon(paths DaemonPaths) error {
 		_ = cmd.Process.Release()
 	}
 
-	// Wait for socket to be ready
+	// Poll for socket OR status file
 	for range 50 {
 		time.Sleep(100 * time.Millisecond)
+
+		// Check socket first (success fast path)
 		if _, err := os.Stat(paths.Socket); err == nil {
 			return nil
+		}
+
+		// Check status file for explicit ready or error
+		if status, err := readStatusFile(statusPath); err == nil {
+			switch status.Status {
+			case "ready":
+				return nil
+			case "error":
+				return fmt.Errorf("daemon failed to start: %s", status.Error)
+			}
 		}
 	}
 
@@ -512,4 +531,24 @@ func indexStateToString(state sweepv1.IndexState) string {
 	default:
 		return "unknown"
 	}
+}
+
+// statusFile represents the daemon startup status file.
+type statusFile struct {
+	Status string `json:"status"`
+	PID    int    `json:"pid,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// readStatusFile reads and parses the daemon status file.
+func readStatusFile(path string) (*statusFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var status statusFile
+	if err := json.Unmarshal(data, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
 }

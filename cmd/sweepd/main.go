@@ -84,10 +84,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse min index size from config
+	var minIndexSize int64
+	if cfg.Daemon.MinIndexSize != "" {
+		if parsed, parseErr := parseSize(cfg.Daemon.MinIndexSize); parseErr == nil {
+			minIndexSize = parsed
+			log.Info("using configured min index size", "size", cfg.Daemon.MinIndexSize, "bytes", minIndexSize)
+		} else {
+			log.Warn("invalid min_index_size, using default", "value", cfg.Daemon.MinIndexSize, "error", parseErr)
+		}
+	}
+
 	// Create server
 	srvCfg := daemon.Config{
-		SocketPath: socketPath,
-		DataDir:    dataDir,
+		SocketPath:       socketPath,
+		DataDir:          dataDir,
+		MinLargeFileSize: minIndexSize, // 0 means use default (10MB)
 	}
 
 	srv, err := daemon.NewServer(srvCfg)

@@ -29,10 +29,11 @@ type LoggingConfig struct {
 
 // DaemonConfig configures the background daemon.
 type DaemonConfig struct {
-	AutoStart  bool   `mapstructure:"auto_start"`
-	BinaryPath string `mapstructure:"binary_path"` // Path to sweepd binary (auto-discovered if empty)
-	SocketPath string `mapstructure:"socket_path"`
-	PIDPath    string `mapstructure:"pid_path"`
+	AutoStart    bool   `mapstructure:"auto_start"`
+	BinaryPath   string `mapstructure:"binary_path"` // Path to sweepd binary (auto-discovered if empty)
+	SocketPath   string `mapstructure:"socket_path"`
+	PIDPath      string `mapstructure:"pid_path"`
+	MinIndexSize string `mapstructure:"min_index_size"` // Minimum file size for large file index (default: 10MB)
 }
 
 // Config represents the application configuration.
@@ -110,8 +111,9 @@ func Load() (*Config, error) {
 
 	// Daemon defaults
 	v.SetDefault("daemon.auto_start", true)
-	v.SetDefault("daemon.socket_path", "") // Empty means use default XDG path
-	v.SetDefault("daemon.pid_path", "")    // Empty means use default XDG path
+	v.SetDefault("daemon.socket_path", "")    // Empty means use default XDG path
+	v.SetDefault("daemon.pid_path", "")       // Empty means use default XDG path
+	v.SetDefault("daemon.min_index_size", "") // Empty means use default (10MB)
 
 	// Read config file (ignore if not found)
 	if err := v.ReadInConfig(); err != nil {
@@ -269,6 +271,10 @@ daemon:
   socket_path: ""
   # PID file path (empty means use default: $XDG_DATA_HOME/sweep/sweep.pid)
   pid_path: ""
+  # Minimum file size for the large file index (default: 10MB)
+  # Lower values = more files indexed = larger index but faster queries for smaller files
+  # Examples: 1MB, 500KB, 100KB
+  min_index_size: ""
 `, DefaultMinSize, DefaultPath, DefaultDirWorkers, DefaultFileWorkers, manifestDir, DefaultRetentionDays)
 
 	if err := os.WriteFile(configPath, []byte(defaultConfig), 0o644); err != nil {

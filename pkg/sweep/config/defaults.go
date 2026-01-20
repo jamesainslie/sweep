@@ -23,6 +23,13 @@ const (
 
 	// DefaultFileWorkers is the default number of file processing workers.
 	DefaultFileWorkers = 8
+
+	// DefaultMinIndexSize is the default minimum file size for the daemon's large file index.
+	// Files smaller than this are not indexed for fast queries.
+	DefaultMinIndexSize = "10MB"
+
+	// DefaultMinIndexSizeBytes is DefaultMinIndexSize in bytes.
+	DefaultMinIndexSizeBytes = 10 * 1024 * 1024
 )
 
 // DefaultExclusions contains paths that should be excluded from scanning by default.

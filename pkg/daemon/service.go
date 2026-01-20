@@ -172,6 +172,15 @@ func (s *Service) GetLargeFiles(req *sweepv1.GetLargeFilesRequest, stream grpc.S
 	root := req.GetPath()
 	minSize := req.GetMinSize()
 
+	// Warn if query minSize is below the index threshold
+	if minSize < s.indexer.MinLargeFileSize {
+		log := logging.Get("daemon")
+		log.Warn("query minSize below index threshold - results may be incomplete",
+			"query_min_size", minSize,
+			"index_threshold", s.indexer.MinLargeFileSize,
+			"hint", "configure daemon.min_index_size in config or use --no-daemon")
+	}
+
 	// Build the filter from request
 	f := requestToFilter(req)
 

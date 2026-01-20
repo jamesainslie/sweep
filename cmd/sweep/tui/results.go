@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
 
@@ -707,11 +708,17 @@ func (m *ResultModel) removeFileAtIndex(idx int) {
 
 // ViewWithProgress renders the results with scan progress information in the footer.
 func (m ResultModel) ViewWithProgress(progress ScanProgress) string {
-	return m.ViewWithProgressAndNotifications(progress, nil, false)
+	return m.ViewWithProgressAndNotifications(progress, nil, false, nil)
 }
 
-// ViewWithProgressAndNotifications renders the results with progress, notifications, and live status.
-func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, notifications []Notification, liveWatching bool) string {
+// ViewWithProgressAndNotifications renders the results with progress, notifications, live status,
+// and status hints.
+func (m ResultModel) ViewWithProgressAndNotifications(
+	progress ScanProgress,
+	notifications []Notification,
+	liveWatching bool,
+	statusHint *logging.LogEntry,
+) string {
 	// Show empty state only when scan is complete and no files found
 	if len(m.files) == 0 && !progress.Scanning {
 		return m.renderEmpty()
@@ -769,10 +776,10 @@ func (m ResultModel) ViewWithProgressAndNotifications(progress ScanProgress, not
 		b.WriteString(m.renderNotifications(contentWidth, notifications))
 	}
 
-	// Footer with progress.
+	// Footer with progress and status hint.
 	b.WriteString(renderDivider(contentWidth))
 	b.WriteString("\n")
-	b.WriteString(m.renderFooterWithProgress(contentWidth, progress))
+	b.WriteString(m.renderFooterWithProgressAndHint(contentWidth, progress, statusHint))
 
 	content := b.String()
 	return outerBoxStyle.Width(m.width - 2).Height(m.height - 2).Render(content)
@@ -896,8 +903,8 @@ func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress)
 	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
 }
 
-// renderFooterWithProgress renders the footer with selection summary and scan status.
-func (m ResultModel) renderFooterWithProgress(width int, progress ScanProgress) string {
+// renderFooterWithProgressAndHint renders the footer with selection summary, scan status, and status hint.
+func (m ResultModel) renderFooterWithProgressAndHint(width int, progress ScanProgress, statusHint *logging.LogEntry) string {
 	selectedCount := len(m.selected)
 	selectedSize := m.SelectedSize()
 
@@ -910,7 +917,13 @@ func (m ResultModel) renderFooterWithProgress(width int, progress ScanProgress) 
 		left = fmt.Sprintf("  Selected: %d files (%s)", selectedCount, types.FormatSize(selectedSize))
 	}
 
-	right := mutedTextStyle.Render("[" + string(rune(0x2191)) + string(rune(0x2193)) + "] Navigate")
+	// If we have a status hint, show it instead of navigation hint
+	var right string
+	if statusHint != nil {
+		right = renderStatusHint(statusHint, width-lipgloss.Width(left)-4)
+	} else {
+		right = mutedTextStyle.Render("[" + string(rune(0x2191)) + string(rune(0x2193)) + "] Navigate")
+	}
 
 	spacing := width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if spacing < 1 {
@@ -918,4 +931,40 @@ func (m ResultModel) renderFooterWithProgress(width int, progress ScanProgress) 
 	}
 
 	return left + strings.Repeat(" ", spacing) + right
+}
+
+// renderStatusHint formats a log entry as a status hint with color coding.
+func renderStatusHint(entry *logging.LogEntry, maxWidth int) string {
+	if entry == nil {
+		return ""
+	}
+
+	// Format: ● [Component] Message
+	hint := fmt.Sprintf("[%s] %s", entry.Component, entry.Message)
+
+	// Truncate if too long
+	if len(hint) > maxWidth-2 { // -2 for "● "
+		if maxWidth > 5 {
+			hint = hint[:maxWidth-5] + "..."
+		} else {
+			hint = hint[:maxWidth-2]
+		}
+	}
+
+	// Select style based on level
+	var style lipgloss.Style
+	switch entry.Level {
+	case logging.LevelDebug:
+		style = statusHintDebugStyle
+	case logging.LevelInfo:
+		style = statusHintInfoStyle
+	case logging.LevelWarn:
+		style = statusHintWarnStyle
+	case logging.LevelError:
+		style = statusHintErrorStyle
+	default:
+		style = statusHintInfoStyle
+	}
+
+	return style.Render("● " + hint)
 }

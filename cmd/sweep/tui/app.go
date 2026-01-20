@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/cache"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -87,6 +88,14 @@ type Model struct {
 	// Notifications for live events
 	notifications []Notification
 
+	// Status bar hint state
+	statusHint       *logging.LogEntry // Current hint to display (nil if none)
+	statusHintExpiry time.Time         // When to hide the hint
+	logEntryChan     <-chan logging.LogEntry
+
+	// Log viewer pane state
+	logViewer *LogViewerState
+
 	// Confirmation dialog state
 	confirmFocused int // 0 = cancel, 1 = delete
 
@@ -105,11 +114,17 @@ type Model struct {
 
 // NewModel creates a new TUI model with the given options.
 func NewModel(opts Options) Model {
+	log := logging.Get("tui")
+	log.Info("TUI starting", "root", opts.Root, "minSize", types.FormatSize(opts.MinSize))
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(dangerColor)
+
+	// Subscribe to log entries for status bar hints
+	logEntryChan := logging.Subscribe()
 
 	return Model{
 		state:       StateResults,
@@ -127,6 +142,8 @@ func NewModel(opts Options) Model {
 		deleteSpinner:  s,
 		fileChan:       make(chan types.FileInfo, 100),
 		progressChan:   make(chan types.ScanProgress, 100),
+		logEntryChan:   logEntryChan,
+		logViewer:      NewLogViewerState(),
 	}
 }
 
@@ -136,6 +153,7 @@ func (m Model) Init() tea.Cmd {
 		m.startStreamingScan(),
 		m.listenForFiles(),
 		m.listenForProgress(),
+		m.listenForLogEntries(),
 		m.tickUI(),
 	)
 }
@@ -182,6 +200,11 @@ type LiveWatchErrorMsg struct {
 	Err error
 }
 
+// LogEntryMsg is sent when a log entry is received from the logging system.
+type LogEntryMsg struct {
+	Entry logging.LogEntry
+}
+
 // Update handles messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -207,8 +230,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notifications = activeNotifications
 
-		// Keep UI refreshing during scanning or if we have notifications
-		if !m.scanDone || m.liveWatching || len(m.notifications) > 0 {
+		// Clear expired status hint
+		if m.statusHint != nil && now.After(m.statusHintExpiry) {
+			m.statusHint = nil
+		}
+
+		// Keep UI refreshing during scanning, live watching, notifications, or status hint
+		if !m.scanDone || m.liveWatching || len(m.notifications) > 0 || m.statusHint != nil {
 			return m, m.tickUI()
 		}
 		return m, nil
@@ -240,13 +268,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Mark scan as done
 		m.scanDone = true
 		m.scanProgress.Scanning = false
+		elapsed := time.Since(m.scanProgress.StartTime)
 		m.resultModel.metrics = ScanMetrics{
 			DirsScanned:  msg.DirsScanned,
 			FilesScanned: msg.FilesScanned,
 			CacheHits:    msg.FilesScanned,
 			CacheMisses:  0,
-			Elapsed:      time.Since(m.scanProgress.StartTime),
+			Elapsed:      elapsed,
 		}
+		logging.Get("tui").Info("scan completed via daemon",
+			"files", len(msg.Files),
+			"elapsed", elapsed.Round(time.Millisecond))
 		// Start live file watching
 		if !m.options.NoDaemon {
 			return m, m.startLiveWatch()
@@ -256,14 +288,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ScanDoneMsg:
 		m.scanDone = true
 		m.scanProgress.Scanning = false
+		elapsed := time.Since(m.scanProgress.StartTime)
 		// Update metrics in result model
 		m.resultModel.metrics = ScanMetrics{
 			DirsScanned:  m.scanProgress.DirsScanned,
 			FilesScanned: m.scanProgress.FilesScanned,
 			CacheHits:    m.scanProgress.CacheHits,
 			CacheMisses:  m.scanProgress.CacheMisses,
-			Elapsed:      time.Since(m.scanProgress.StartTime),
+			Elapsed:      elapsed,
 		}
+		logging.Get("tui").Info("scan completed",
+			"files", len(m.resultModel.files),
+			"dirs", m.scanProgress.DirsScanned,
+			"elapsed", elapsed.Round(time.Millisecond))
 		// Start live file watching if daemon is available
 		if !m.options.NoDaemon {
 			return m, m.startLiveWatch()
@@ -273,6 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LiveWatchStartedMsg:
 		m.liveWatching = true
 		m.liveEventChan = msg.EventChan
+		logging.Get("tui").Debug("live watch started")
 		return m, m.listenForLiveEvents()
 
 	case LiveWatchErrorMsg:
@@ -287,6 +325,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Keep listening for more events
 		return m, m.listenForLiveEvents()
+
+	case LogEntryMsg:
+		// Add to log viewer buffer
+		m.logViewer.AddEntry(msg.Entry)
+
+		// Only show info/warn/error level hints (filter out debug)
+		if msg.Entry.Level >= logging.LevelInfo {
+			m.statusHint = &msg.Entry
+			m.statusHintExpiry = time.Now().Add(3 * time.Second)
+		}
+		// Keep listening for more log entries
+		return m, m.listenForLogEntries()
 
 	case spinner.TickMsg:
 		if m.state == StateDeleting {
@@ -326,9 +376,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// State-specific keys
 	switch m.state {
 	case StateResults:
+		// Log viewer takes priority when open
+		if m.logViewer.Open {
+			switch key {
+			case "L":
+				m.logViewer.Toggle()
+			case "esc":
+				m.logViewer.Open = false
+			case "1":
+				m.logViewer.SetFilterLevel(logging.LevelDebug)
+			case "2":
+				m.logViewer.SetFilterLevel(logging.LevelInfo)
+			case "3":
+				m.logViewer.SetFilterLevel(logging.LevelWarn)
+			case "4":
+				m.logViewer.SetFilterLevel(logging.LevelError)
+			case "up", "k":
+				m.logViewer.ScrollUp()
+			case "down", "j":
+				m.logViewer.ScrollDown(m.logViewerVisibleRows())
+			case "q":
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
 		switch key {
 		case "q", "esc":
 			return m, tea.Quit
+		case "L":
+			m.logViewer.Toggle()
 		case "enter":
 			if m.resultModel.HasSelection() {
 				m.state = StateConfirm
@@ -381,7 +458,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	switch m.state {
 	case StateResults:
-		return m.resultModel.ViewWithProgressAndNotifications(m.scanProgress, m.notifications, m.liveWatching)
+		return m.renderResultsWithLogViewer()
 	case StateConfirm:
 		return m.renderConfirmDialog()
 	case StateDeleting:
@@ -390,6 +467,51 @@ func (m Model) View() string {
 		return m.renderComplete()
 	}
 	return ""
+}
+
+// renderResultsWithLogViewer renders the results view, optionally with the log viewer pane.
+func (m Model) renderResultsWithLogViewer() string {
+	if !m.logViewer.Open {
+		return m.resultModel.ViewWithProgressAndNotifications(m.scanProgress, m.notifications, m.liveWatching, m.statusHint)
+	}
+
+	// Calculate heights: log viewer takes bottom 1/3 of screen
+	logViewerHeight := m.height / 3
+	if logViewerHeight < 5 {
+		logViewerHeight = 5
+	}
+	resultsHeight := m.height - logViewerHeight
+
+	// Render results with reduced height
+	m.resultModel.SetDimensions(m.width, resultsHeight)
+	resultsView := m.resultModel.ViewWithProgressAndNotifications(m.scanProgress, m.notifications, m.liveWatching, m.statusHint)
+
+	// Render log viewer pane
+	logViewerView := m.renderLogViewerPane(logViewerHeight)
+
+	// Stack them vertically
+	return resultsView + "\n" + logViewerView
+}
+
+// renderLogViewerPane renders the collapsible log viewer pane.
+func (m Model) renderLogViewerPane(height int) string {
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	entries := m.logViewer.Buffer.Entries()
+	return renderLogViewer(entries, m.logViewer.FilterLevel, m.logViewer.ScrollOffset, contentWidth, height)
+}
+
+// logViewerVisibleRows returns the number of visible rows in the log viewer.
+func (m Model) logViewerVisibleRows() int {
+	logViewerHeight := m.height / 3
+	if logViewerHeight < 5 {
+		logViewerHeight = 5
+	}
+	// Subtract 2 for title bar and divider
+	return logViewerHeight - 2
 }
 
 // renderConfirmDialog renders the deletion confirmation dialog.
@@ -683,6 +805,22 @@ func (m Model) listenForProgress() tea.Cmd {
 	}
 }
 
+// listenForLogEntries returns a command that waits for log entries.
+func (m Model) listenForLogEntries() tea.Cmd {
+	logEntryChan := m.logEntryChan
+	return func() tea.Msg {
+		if logEntryChan == nil {
+			return nil
+		}
+		entry, ok := <-logEntryChan
+		if !ok {
+			// Channel closed
+			return nil
+		}
+		return LogEntryMsg{Entry: entry}
+	}
+}
+
 // startLiveWatch starts watching for live file events from the daemon.
 func (m Model) startLiveWatch() tea.Cmd {
 	ctx := m.ctx
@@ -828,6 +966,11 @@ func (m Model) startDelete() (tea.Model, tea.Cmd) {
 	files := m.resultModel.SelectedFiles()
 	dryRun := m.options.DryRun
 
+	logging.Get("tui").Info("delete started",
+		"count", m.deleteTotal,
+		"size", types.FormatSize(m.lastFreedSize),
+		"dryRun", dryRun)
+
 	// Create channel for progress updates
 	m.deleteProgressChan = make(chan deleteProgressMsg, 100)
 	progressChan := m.deleteProgressChan
@@ -887,12 +1030,19 @@ func (m *Model) removeDeletedFiles() {
 
 	// Calculate actual freed size (excluding errors)
 	var actualFreedSize int64
+	deletedCount := 0
 	for _, file := range files {
 		if !errorPaths[file.Path] && !m.options.DryRun {
 			actualFreedSize += file.Size
+			deletedCount++
 			m.resultModel.RemoveFile(file.Path)
 		}
 	}
+
+	logging.Get("tui").Info("delete completed",
+		"deleted", deletedCount,
+		"freed", types.FormatSize(actualFreedSize),
+		"errors", len(m.deleteErrors))
 
 	// Update the freed size (add to any previous freed size)
 	currentFreed := m.resultModel.LastFreedSize()

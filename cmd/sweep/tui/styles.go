@@ -199,3 +199,46 @@ var (
 					Foreground(warningColor).
 					Padding(0, 1)
 )
+
+// Status hint styles for log entry display in footer.
+var (
+	// statusHintDebugStyle for debug level log hints.
+	statusHintDebugStyle = lipgloss.NewStyle().Foreground(mutedColor)
+
+	// statusHintInfoStyle for info level log hints.
+	statusHintInfoStyle = lipgloss.NewStyle().Foreground(successColor)
+
+	// statusHintWarnStyle for warn level log hints.
+	statusHintWarnStyle = lipgloss.NewStyle().Foreground(warningColor)
+
+	// statusHintErrorStyle for error level log hints.
+	statusHintErrorStyle = lipgloss.NewStyle().Foreground(dangerColor)
+)
+
+// Log viewer styles.
+var (
+	// logDebugStyle for debug level logs.
+	logDebugStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#888888"))
+
+	// logInfoStyle for info level logs.
+	logInfoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00AAFF"))
+
+	// logWarnStyle for warning level logs.
+	logWarnStyle = lipgloss.NewStyle().
+			Foreground(warningColor)
+
+	// logErrorStyle for error level logs.
+	logErrorStyle = lipgloss.NewStyle().
+			Foreground(dangerColor).
+			Bold(true)
+
+	// logTimeStyle for log timestamps.
+	logTimeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666"))
+
+	// logComponentStyle for log component names.
+	logComponentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#AA88FF"))
+)

@@ -27,9 +27,11 @@ var Aliases = map[string]interface{}{
 }
 
 const (
-	binaryName = "sweep"
-	mainPkg    = "./cmd/sweep"
-	binDir     = "bin"
+	binaryName       = "sweep"
+	daemonBinaryName = "sweepd"
+	mainPkg          = "./cmd/sweep"
+	daemonPkg        = "./cmd/sweepd"
+	binDir           = "bin"
 )
 
 // All runs the complete build pipeline.
@@ -39,8 +41,14 @@ func All() error {
 	return nil
 }
 
-// Build compiles the sweep binary.
+// Build compiles both sweep and sweepd binaries.
 func Build() error {
+	st.Deps(BuildCLI, BuildDaemon)
+	return nil
+}
+
+// BuildCLI compiles the sweep CLI binary.
+func BuildCLI() error {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return fmt.Errorf("creating bin directory: %w", err)
 	}
@@ -54,10 +62,41 @@ func Build() error {
 	return sh.RunV("go", "build", "-ldflags", ldflags, "-o", output, mainPkg)
 }
 
-// Install builds and installs sweep to the user's GOBIN or /usr/local/bin.
-func Install() error {
-	st.Deps(Build)
+// BuildDaemon compiles the sweepd daemon binary.
+func BuildDaemon() error {
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return fmt.Errorf("creating bin directory: %w", err)
+	}
 
+	ldflags := buildLdflags()
+	output := filepath.Join(binDir, daemonBinaryName)
+	if runtime.GOOS == "windows" {
+		output += ".exe"
+	}
+
+	return sh.RunV("go", "build", "-ldflags", ldflags, "-o", output, daemonPkg)
+}
+
+// Install builds and installs both sweep and sweepd to the user's GOBIN or /usr/local/bin.
+func Install() error {
+	st.Deps(InstallCLI, InstallDaemon)
+	return nil
+}
+
+// InstallCLI builds and installs sweep CLI to the user's GOBIN or /usr/local/bin.
+func InstallCLI() error {
+	st.Deps(BuildCLI)
+	return installBinary(binaryName)
+}
+
+// InstallDaemon builds and installs sweepd daemon to the user's GOBIN or /usr/local/bin.
+func InstallDaemon() error {
+	st.Deps(BuildDaemon)
+	return installBinary(daemonBinaryName)
+}
+
+// installBinary installs a binary to the user's GOBIN or /usr/local/bin.
+func installBinary(name string) error {
 	gocmd := st.GoCmd()
 	bin, err := sh.Output(gocmd, "env", "GOBIN")
 	if err != nil {
@@ -76,12 +115,12 @@ func Install() error {
 		}
 	}
 
-	src := filepath.Join(binDir, binaryName)
+	src := filepath.Join(binDir, name)
 	if runtime.GOOS == "windows" {
 		src += ".exe"
 	}
 
-	dst := filepath.Join(bin, binaryName)
+	dst := filepath.Join(bin, name)
 	if runtime.GOOS == "windows" {
 		dst += ".exe"
 	}
@@ -93,8 +132,16 @@ func Install() error {
 	return sh.Copy(dst, src)
 }
 
-// Uninstall removes the installed sweep binary.
+// Uninstall removes both installed sweep and sweepd binaries.
 func Uninstall() error {
+	if err := uninstallBinary(binaryName); err != nil {
+		return err
+	}
+	return uninstallBinary(daemonBinaryName)
+}
+
+// uninstallBinary removes an installed binary.
+func uninstallBinary(name string) error {
 	gocmd := st.GoCmd()
 	bin, err := sh.Output(gocmd, "env", "GOBIN")
 	if err != nil {
@@ -112,7 +159,7 @@ func Uninstall() error {
 		}
 	}
 
-	target := filepath.Join(bin, binaryName)
+	target := filepath.Join(bin, name)
 	if runtime.GOOS == "windows" {
 		target += ".exe"
 	}

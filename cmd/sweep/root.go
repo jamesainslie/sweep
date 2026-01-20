@@ -25,13 +25,16 @@ var (
 		Long: `Sweep scans directories for large files and helps you reclaim disk space.
 
 By default, sweep launches an interactive TUI to browse and manage large files.
-Use --no-interactive or --json for non-interactive output.
+Use --no-interactive or --output for non-interactive output.
 
 Examples:
   sweep                      # Scan current directory with TUI
   sweep ~/Downloads          # Scan specific directory
   sweep -s 500M .            # Find files larger than 500MB
-  sweep -n -j .              # Non-interactive JSON output
+  sweep -n -o json .         # Non-interactive JSON output
+  sweep -n -o pretty .       # Non-interactive pretty table output
+  sweep --type video .       # Find video files
+  sweep --older-than 30d .   # Find files older than 30 days
   sweep config show          # Show configuration
   sweep history              # View operation history`,
 		Args: cobra.MaximumNArgs(1),
@@ -48,24 +51,60 @@ func init() {
 	rootCmd.PersistentFlags().IntP("workers", "w", 0, "override worker count (0=auto)")
 	rootCmd.PersistentFlags().StringSliceP("exclude", "e", nil, "exclude patterns (can be specified multiple times)")
 	rootCmd.PersistentFlags().BoolP("no-interactive", "n", false, "disable TUI, use text output")
-	rootCmd.PersistentFlags().BoolP("json", "j", false, "output JSON format")
 	rootCmd.PersistentFlags().BoolP("dry-run", "d", false, "don't delete files (preview only)")
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "minimal output")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "debug output")
 	rootCmd.PersistentFlags().Bool("no-cache", false, "bypass cache, perform full scan")
 	rootCmd.PersistentFlags().Bool("no-daemon", false, "bypass daemon, perform direct scan")
 
+	// Output format flags
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "pretty", "output format (pretty, plain, json, jsonl, csv, tsv, yaml, paths, markdown, template)")
+	rootCmd.PersistentFlags().StringVar(&templateStr, "template", "", "Go template for template format")
+	rootCmd.PersistentFlags().StringVarP(&columns, "columns", "c", "size,path", "columns to display (comma-separated)")
+
+	// Filter flags
+	rootCmd.PersistentFlags().IntVarP(&limit, "limit", "l", 50, "max files to return (0 for unlimited)")
+	rootCmd.PersistentFlags().StringVar(&olderThan, "older-than", "", "files older than duration (e.g., 30d, 2w, 1mo)")
+	rootCmd.PersistentFlags().StringVar(&newerThan, "newer-than", "", "files newer than duration (e.g., 7d, 1w)")
+	rootCmd.PersistentFlags().StringVar(&fileTypes, "type", "", "file type groups (video, audio, image, archive, document, code, log)")
+	rootCmd.PersistentFlags().StringVar(&extensions, "ext", "", "file extensions (comma-separated, e.g., .mp4,.mkv)")
+	rootCmd.PersistentFlags().StringVar(&include, "include", "", "include glob patterns (comma-separated)")
+	rootCmd.PersistentFlags().IntVar(&maxDepth, "max-depth", 0, "max directory depth (0 for unlimited)")
+	rootCmd.PersistentFlags().StringVar(&sortBy, "sort", "size", "sort by: size, age, path")
+	rootCmd.PersistentFlags().BoolVar(&reverse, "reverse", false, "reverse sort order")
+
+	// Daemon/cache control flags
+	rootCmd.PersistentFlags().StringVar(&maxAge, "max-age", "", "max index age before rescan (e.g., 1h, 30m)")
+	rootCmd.PersistentFlags().BoolVar(&forceDaemon, "force-daemon", false, "fail if daemon unavailable")
+	rootCmd.PersistentFlags().BoolVar(&forceScan, "force-scan", false, "always perform direct scan, ignore daemon")
+
 	// Bind flags to viper
 	_ = viper.BindPFlag("min_size", rootCmd.PersistentFlags().Lookup("min-size"))
 	_ = viper.BindPFlag("workers", rootCmd.PersistentFlags().Lookup("workers"))
 	_ = viper.BindPFlag("exclude", rootCmd.PersistentFlags().Lookup("exclude"))
 	_ = viper.BindPFlag("no_interactive", rootCmd.PersistentFlags().Lookup("no-interactive"))
-	_ = viper.BindPFlag("json", rootCmd.PersistentFlags().Lookup("json"))
 	_ = viper.BindPFlag("dry_run", rootCmd.PersistentFlags().Lookup("dry-run"))
 	_ = viper.BindPFlag("quiet", rootCmd.PersistentFlags().Lookup("quiet"))
 	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 	_ = viper.BindPFlag("no_cache", rootCmd.PersistentFlags().Lookup("no-cache"))
 	_ = viper.BindPFlag("no_daemon", rootCmd.PersistentFlags().Lookup("no-daemon"))
+
+	// Bind new flags to viper
+	_ = viper.BindPFlag("output", rootCmd.PersistentFlags().Lookup("output"))
+	_ = viper.BindPFlag("template", rootCmd.PersistentFlags().Lookup("template"))
+	_ = viper.BindPFlag("columns", rootCmd.PersistentFlags().Lookup("columns"))
+	_ = viper.BindPFlag("limit", rootCmd.PersistentFlags().Lookup("limit"))
+	_ = viper.BindPFlag("older_than", rootCmd.PersistentFlags().Lookup("older-than"))
+	_ = viper.BindPFlag("newer_than", rootCmd.PersistentFlags().Lookup("newer-than"))
+	_ = viper.BindPFlag("type", rootCmd.PersistentFlags().Lookup("type"))
+	_ = viper.BindPFlag("ext", rootCmd.PersistentFlags().Lookup("ext"))
+	_ = viper.BindPFlag("include", rootCmd.PersistentFlags().Lookup("include"))
+	_ = viper.BindPFlag("max_depth", rootCmd.PersistentFlags().Lookup("max-depth"))
+	_ = viper.BindPFlag("sort", rootCmd.PersistentFlags().Lookup("sort"))
+	_ = viper.BindPFlag("reverse", rootCmd.PersistentFlags().Lookup("reverse"))
+	_ = viper.BindPFlag("max_age", rootCmd.PersistentFlags().Lookup("max-age"))
+	_ = viper.BindPFlag("force_daemon", rootCmd.PersistentFlags().Lookup("force-daemon"))
+	_ = viper.BindPFlag("force_scan", rootCmd.PersistentFlags().Lookup("force-scan"))
 }
 
 // initConfig reads in config file and environment variables.

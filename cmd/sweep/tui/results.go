@@ -309,9 +309,13 @@ var (
 	checkSelectedChar   = "✓"
 	checkUnselectedChar = "○"
 
-	// Checkbox styles for non-highlighted rows
-	checkboxCheckedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
-	checkboxUncheckedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	// Checkbox column style: 3 cells wide, centered
+	// Width and Align MUST be on the style that calls Render()
+	checkboxColStyle = lipgloss.NewStyle().Width(3).Align(lipgloss.Center)
+
+	// Checkbox styles inherit Width/Align and add color
+	checkboxCheckedStyle   = checkboxColStyle.Foreground(lipgloss.Color("#00FF00")).Bold(true)
+	checkboxUncheckedStyle = checkboxColStyle.Foreground(lipgloss.Color("#666666"))
 
 	// Size style
 	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)
@@ -346,7 +350,7 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Build checkbox column (3 cells wide, centered)
+		// Determine checkbox character
 		var checkChar string
 		if isSelected {
 			checkChar = checkSelectedChar
@@ -355,22 +359,23 @@ func (m ResultModel) renderFileList(width int) string {
 		}
 
 		// For highlighted row, use plain text so background spans full width
-		// For normal rows, use styled checkbox and size
+		// For normal rows, use styled checkbox (Width/Align built into style)
 		if isCursor {
+			// Plain text row - center manually since no lipgloss style
 			checkbox := centerCell(checkChar, 3)
 			size := padLeft(types.FormatSize(file.Size), 10)
 			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
-			var styledCheck string
+			// Styled row - lipgloss handles centering via Width(3).Align(Center)
+			var checkbox string
 			if isSelected {
-				styledCheck = checkboxCheckedStyle.Render(checkChar)
+				checkbox = checkboxCheckedStyle.Render(checkChar)
 			} else {
-				styledCheck = checkboxUncheckedStyle.Render(checkChar)
+				checkbox = checkboxUncheckedStyle.Render(checkChar)
 			}
-			checkbox := centerCell(styledCheck, 3)
 			size := sizeStyle.Render(types.FormatSize(file.Size))
-			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
+			row := checkbox + size + "  " + filename
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

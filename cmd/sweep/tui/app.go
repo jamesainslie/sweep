@@ -51,6 +51,9 @@ type ScanProgress struct {
 	CacheMisses  int64
 	Scanning     bool
 	StartTime    time.Time
+	// WalkCompleteElapsed is the frozen elapsed time when directory traversal completes.
+	// If non-zero, this is used for display instead of continuing to count from StartTime.
+	WalkCompleteElapsed time.Duration
 }
 
 // NotificationType represents the type of notification.
@@ -262,6 +265,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanProgress.FilesScanned = msg.FilesScanned
 		m.scanProgress.CacheHits = msg.CacheHits
 		m.scanProgress.CacheMisses = msg.CacheMisses
+		// Freeze elapsed time when walk completes (cache flush may continue)
+		if msg.WalkComplete && m.scanProgress.WalkCompleteElapsed == 0 {
+			m.scanProgress.WalkCompleteElapsed = time.Since(m.scanProgress.StartTime)
+		}
 		// Keep listening for more progress
 		return m, m.listenForProgress()
 

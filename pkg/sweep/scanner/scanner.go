@@ -53,6 +53,9 @@ type Scanner struct {
 
 	// root is the resolved absolute path being scanned.
 	root string
+
+	// walkComplete indicates directory traversal is finished (cache flush may be ongoing).
+	walkComplete atomic.Bool
 }
 
 // New creates a new Scanner with the given options.
@@ -100,6 +103,11 @@ func (s *Scanner) Scan(ctx context.Context) (*types.ScanResult, error) {
 	if err := s.executeWalk(ctx, dirsToScan); err != nil {
 		return nil, err
 	}
+
+	// Signal walk completion so TUI can freeze elapsed time display.
+	s.walkComplete.Store(true)
+	s.currentPath.Store("(updating cache...)")
+	s.reportProgressForce()
 
 	// Phase 3: Update cache with collected entries.
 	s.flushCacheEntries()
@@ -482,6 +490,7 @@ func (s *Scanner) sendProgress() {
 		BytesScanned: s.bytesScanned.Load(),
 		CacheHits:    s.cacheHits.Load(),
 		CacheMisses:  s.cacheMisses.Load(),
+		WalkComplete: s.walkComplete.Load(),
 	})
 }
 

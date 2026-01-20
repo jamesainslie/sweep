@@ -138,6 +138,11 @@ type ScanProgress struct {
 
 	// CacheMisses is the number of files not in cache (freshly scanned).
 	CacheMisses int64 `json:"cache_misses"`
+
+	// WalkComplete indicates that directory traversal is finished.
+	// When true, the scanner is in post-processing (cache flush) phase.
+	// The TUI uses this to freeze the displayed elapsed time.
+	WalkComplete bool `json:"walk_complete,omitempty"`
 }
 
 // sizePattern matches size strings like "100M", "2G", "500K", "1.5GB", etc.

@@ -923,7 +923,12 @@ func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress)
 	// Elapsed time.
 	var elapsed time.Duration
 	if progress.Scanning {
-		elapsed = time.Since(progress.StartTime)
+		// Use frozen time if walk completed (cache flush may still be ongoing)
+		if progress.WalkCompleteElapsed > 0 {
+			elapsed = progress.WalkCompleteElapsed
+		} else {
+			elapsed = time.Since(progress.StartTime)
+		}
 	} else {
 		elapsed = m.metrics.Elapsed
 	}

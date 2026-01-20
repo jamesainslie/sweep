@@ -3,6 +3,8 @@ package filter
 import (
 	"strings"
 	"time"
+
+	"github.com/gobwas/glob"
 )
 
 // Filter defines criteria for filtering, sorting, and limiting file lists.
@@ -169,4 +171,102 @@ func WithSortDescending(desc bool) Option {
 	return func(f *Filter) {
 		f.SortDescending = desc
 	}
+}
+
+// Match returns true if the file matches all filter criteria.
+// It checks MinSize, Extensions, OlderThan, NewerThan, MaxDepth,
+// Exclude patterns, and Include patterns in that order.
+func (f *Filter) Match(fi FileInfo) bool {
+	if !f.matchSize(fi) {
+		return false
+	}
+	if !f.matchExtension(fi) {
+		return false
+	}
+	if !f.matchDepth(fi) {
+		return false
+	}
+	if !f.matchAge(fi) {
+		return false
+	}
+	if !f.matchPatterns(fi) {
+		return false
+	}
+	return true
+}
+
+// matchSize checks if the file meets the minimum size requirement.
+func (f *Filter) matchSize(fi FileInfo) bool {
+	return f.MinSize <= 0 || fi.Size >= f.MinSize
+}
+
+// matchExtension checks if the file has an allowed extension.
+func (f *Filter) matchExtension(fi FileInfo) bool {
+	if len(f.Extensions) == 0 {
+		return true
+	}
+	ext := strings.ToLower(fi.Ext)
+	for _, e := range f.Extensions {
+		if e == ext {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDepth checks if the file is within the maximum depth.
+func (f *Filter) matchDepth(fi FileInfo) bool {
+	return f.MaxDepth <= 0 || fi.Depth <= f.MaxDepth
+}
+
+// matchAge checks if the file meets the age requirements.
+func (f *Filter) matchAge(fi FileInfo) bool {
+	now := time.Now()
+
+	// Check older than (file must be older than this duration)
+	if f.OlderThan > 0 {
+		threshold := now.Add(-f.OlderThan)
+		if fi.ModTime.After(threshold) {
+			return false
+		}
+	}
+
+	// Check newer than (file must be newer than this duration)
+	if f.NewerThan > 0 {
+		threshold := now.Add(-f.NewerThan)
+		if fi.ModTime.Before(threshold) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// matchPatterns checks if the file matches include/exclude patterns.
+func (f *Filter) matchPatterns(fi FileInfo) bool {
+	// Check exclude patterns
+	if f.matchesAnyPattern(fi.Path, f.Exclude) {
+		return false
+	}
+
+	// Check include patterns (if any specified, must match at least one)
+	if len(f.Include) > 0 && !f.matchesAnyPattern(fi.Path, f.Include) {
+		return false
+	}
+
+	return true
+}
+
+// matchesAnyPattern returns true if the path matches any of the glob patterns.
+func (f *Filter) matchesAnyPattern(path string, patterns []string) bool {
+	for _, pattern := range patterns {
+		g, err := glob.Compile(pattern, '/')
+		if err != nil {
+			continue // Skip invalid patterns
+		}
+		if g.Match(path) {
+			return true
+		}
+	}
+	return false
 }

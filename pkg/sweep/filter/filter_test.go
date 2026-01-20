@@ -282,3 +282,291 @@ func TestMultipleOptions(t *testing.T) {
 		t.Errorf("MaxDepth = %d, want 3", f.MaxDepth)
 	}
 }
+
+// TestMatch_MinSize tests the Match method with MinSize filter.
+func TestMatch_MinSize(t *testing.T) {
+	f := New(WithMinSize(1024))
+
+	tests := []struct {
+		name string
+		size int64
+		want bool
+	}{
+		{name: "above threshold", size: 2048, want: true},
+		{name: "at threshold", size: 1024, want: true},
+		{name: "below threshold", size: 512, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{Size: tt.size}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_Extensions(t *testing.T) {
+	f := New(WithExtensions(".mp4", ".mkv"))
+
+	tests := []struct {
+		name string
+		ext  string
+		want bool
+	}{
+		{name: "matching mp4", ext: ".mp4", want: true},
+		{name: "matching mkv", ext: ".mkv", want: true},
+		{name: "non-matching avi", ext: ".avi", want: false},
+		{name: "no extension", ext: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{Ext: tt.ext}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_MaxDepth(t *testing.T) {
+	f := New(WithMaxDepth(2))
+
+	tests := []struct {
+		name  string
+		depth int
+		want  bool
+	}{
+		{name: "depth 0", depth: 0, want: true},
+		{name: "depth 1", depth: 1, want: true},
+		{name: "depth 2", depth: 2, want: true},
+		{name: "depth 3", depth: 3, want: false},
+		{name: "depth 10", depth: 10, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{Depth: tt.depth}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_OlderThan(t *testing.T) {
+	now := time.Now()
+	f := New(WithOlderThan(24 * time.Hour))
+
+	tests := []struct {
+		name    string
+		modTime time.Time
+		want    bool
+	}{
+		{name: "modified 2 days ago", modTime: now.Add(-48 * time.Hour), want: true},
+		{name: "modified 1 day ago", modTime: now.Add(-24 * time.Hour), want: true},
+		{name: "modified 12 hours ago", modTime: now.Add(-12 * time.Hour), want: false},
+		{name: "modified now", modTime: now, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{ModTime: tt.modTime}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_NewerThan(t *testing.T) {
+	now := time.Now()
+	f := New(WithNewerThan(24 * time.Hour))
+
+	tests := []struct {
+		name    string
+		modTime time.Time
+		want    bool
+	}{
+		{name: "modified 2 days ago", modTime: now.Add(-48 * time.Hour), want: false},
+		{name: "modified 23 hours ago", modTime: now.Add(-23 * time.Hour), want: true},
+		{name: "modified 12 hours ago", modTime: now.Add(-12 * time.Hour), want: true},
+		{name: "modified now", modTime: now, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{ModTime: tt.modTime}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_Exclude(t *testing.T) {
+	f := New(WithExclude("**/node_modules/**", "**/*.tmp"))
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "normal file", path: "/home/user/project/file.txt", want: true},
+		{name: "node_modules file", path: "/home/user/project/node_modules/pkg/index.js", want: false},
+		{name: "tmp file", path: "/home/user/cache.tmp", want: false},
+		{name: "similar to node_modules", path: "/home/user/node_modules_backup/file.txt", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{Path: tt.path}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_Include(t *testing.T) {
+	f := New(WithInclude("**/*.mp4", "**/*.mkv", "**/videos/**"))
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "matching mp4", path: "/home/user/movie.mp4", want: true},
+		{name: "matching mkv", path: "/home/user/show.mkv", want: true},
+		{name: "matching videos dir", path: "/home/user/videos/clip.avi", want: true},
+		{name: "non-matching", path: "/home/user/document.pdf", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fi := FileInfo{Path: tt.path}
+			got := f.Match(fi)
+			if got != tt.want {
+				t.Errorf("Match(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_CombinedFilters(t *testing.T) {
+	now := time.Now()
+	f := New(
+		WithMinSize(1024),
+		WithExtensions(".mp4", ".mkv"),
+		WithMaxDepth(3),
+		WithOlderThan(24*time.Hour),
+		WithExclude("**/cache/**"),
+	)
+
+	tests := []struct {
+		name string
+		fi   FileInfo
+		want bool
+	}{
+		{
+			name: "passes all filters",
+			fi: FileInfo{
+				Path:    "/home/user/videos/movie.mp4",
+				Ext:     ".mp4",
+				Size:    2048,
+				ModTime: now.Add(-48 * time.Hour),
+				Depth:   2,
+			},
+			want: true,
+		},
+		{
+			name: "fails size",
+			fi: FileInfo{
+				Path:    "/home/user/videos/movie.mp4",
+				Ext:     ".mp4",
+				Size:    512,
+				ModTime: now.Add(-48 * time.Hour),
+				Depth:   2,
+			},
+			want: false,
+		},
+		{
+			name: "fails extension",
+			fi: FileInfo{
+				Path:    "/home/user/videos/doc.pdf",
+				Ext:     ".pdf",
+				Size:    2048,
+				ModTime: now.Add(-48 * time.Hour),
+				Depth:   2,
+			},
+			want: false,
+		},
+		{
+			name: "fails depth",
+			fi: FileInfo{
+				Path:    "/home/user/videos/sub/sub2/movie.mp4",
+				Ext:     ".mp4",
+				Size:    2048,
+				ModTime: now.Add(-48 * time.Hour),
+				Depth:   5,
+			},
+			want: false,
+		},
+		{
+			name: "fails age",
+			fi: FileInfo{
+				Path:    "/home/user/videos/movie.mp4",
+				Ext:     ".mp4",
+				Size:    2048,
+				ModTime: now.Add(-12 * time.Hour),
+				Depth:   2,
+			},
+			want: false,
+		},
+		{
+			name: "fails exclude",
+			fi: FileInfo{
+				Path:    "/home/user/cache/videos/movie.mp4",
+				Ext:     ".mp4",
+				Size:    2048,
+				ModTime: now.Add(-48 * time.Hour),
+				Depth:   2,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := f.Match(tt.fi)
+			if got != tt.want {
+				t.Errorf("Match() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatch_NoFilters(t *testing.T) {
+	// With no filters, everything should match
+	f := New(WithLimit(0)) // Set limit to 0, but Match doesn't use limit
+
+	fi := FileInfo{
+		Path:    "/any/path/file.txt",
+		Ext:     ".txt",
+		Size:    100,
+		ModTime: time.Now(),
+		Depth:   10,
+	}
+
+	if !f.Match(fi) {
+		t.Error("Match() should return true when no filters are set")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
@@ -257,16 +258,21 @@ func maybeStartDaemon(cfg *config.Config) error {
 		return nil
 	}
 
-	// Find sweepd binary (same directory as sweep, or in PATH)
-	sweepd, err := exec.LookPath("sweepd")
-	if err != nil {
-		// Try same directory as sweep
-		execPath, execErr := os.Executable()
-		if execErr != nil {
-			return fmt.Errorf("finding sweepd: %w", err)
-		}
+	// Find sweepd binary (same directory as sweep first, then PATH)
+	// This ensures we use the matching version of sweepd
+	var sweepd string
+	execPath, err := os.Executable()
+	if err == nil {
 		sweepd = filepath.Join(filepath.Dir(execPath), "sweepd")
 		if _, statErr := os.Stat(sweepd); statErr != nil {
+			sweepd = "" // Not found in same directory
+		}
+	}
+	if sweepd == "" {
+		// Fallback to PATH
+		var lookErr error
+		sweepd, lookErr = exec.LookPath("sweepd")
+		if lookErr != nil {
 			return errors.New("sweepd not found")
 		}
 	}
@@ -290,6 +296,21 @@ func maybeStartDaemon(cfg *config.Config) error {
 		_ = cmd.Process.Release()
 	}
 
+	// Wait for socket to be ready (daemon is fully initialized)
+	socketPath := cfg.Daemon.SocketPath
+	if socketPath == "" {
+		socketPath = config.DefaultSocketPath()
+	}
+	for range 50 {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := os.Stat(socketPath); err == nil {
+			logging.Get("client").Debug("daemon ready", "socket", socketPath)
+			return nil
+		}
+	}
+
+	// Daemon didn't start successfully, but don't fail - this is auto-start
+	logging.Get("client").Warn("daemon may not have started successfully")
 	return nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	sweepv1 "github.com/jamesainslie/sweep/pkg/api/sweep/v1"
+	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
 
@@ -406,7 +407,7 @@ func RestartDaemon(paths DaemonPaths) error {
 }
 
 // resolveBinary finds the sweepd binary path.
-// Priority: configured path > same directory as executable > PATH
+// Priority: configured path > same directory as executable > GOBIN/GOPATH > PATH.
 func resolveBinary(configured string) (string, error) {
 	// Use configured path if provided
 	if configured != "" {
@@ -422,6 +423,11 @@ func resolveBinary(configured string) (string, error) {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}
+	}
+
+	// Try standard Go binary locations (GOBIN > GOPATH/bin > $HOME/go/bin)
+	if goBinPath := config.DefaultBinaryPath(); goBinPath != "" {
+		return goBinPath, nil
 	}
 
 	// Try PATH

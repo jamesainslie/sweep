@@ -263,6 +263,8 @@ logging:
 daemon:
   # Automatically start daemon when running sweep commands
   auto_start: true
+  # Path to sweepd binary (empty means auto-discover: same-dir > GOBIN > GOPATH/bin > PATH)
+  binary_path: ""
   # Unix socket path (empty means use default: $XDG_DATA_HOME/sweep/sweep.sock)
   socket_path: ""
   # PID file path (empty means use default: $XDG_DATA_HOME/sweep/sweep.pid)
@@ -323,6 +325,37 @@ func DefaultDBPath() string {
 // DefaultLogPath returns the default log file path.
 func DefaultLogPath() string {
 	return filepath.Join(StateDir(), "sweep.log")
+}
+
+// DefaultBinaryPath returns the default sweepd binary path.
+// Priority: GOBIN > GOPATH/bin > $HOME/go/bin
+// Returns empty string if none of these locations exist.
+func DefaultBinaryPath() string {
+	// Check GOBIN first
+	if gobin := os.Getenv("GOBIN"); gobin != "" {
+		candidate := filepath.Join(gobin, "sweepd")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Check GOPATH/bin
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		candidate := filepath.Join(gopath, "bin", "sweepd")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Check $HOME/go/bin (Go's default)
+	if home, err := os.UserHomeDir(); err == nil {
+		candidate := filepath.Join(home, "go", "bin", "sweepd")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return ""
 }
 
 // EnsureDataDir creates the data directory if it doesn't exist.

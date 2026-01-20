@@ -14,6 +14,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
+	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
 )
 
 // Config holds daemon configuration.
@@ -40,6 +41,9 @@ type Server struct {
 	store       *store.Store
 	service     *Service
 	broadcaster *broadcaster.Broadcaster
+	watcher     *watcher.Watcher
+	watcherCtx  context.Context
+	watcherStop context.CancelFunc
 
 	// Migration state
 	migrationMu     sync.RWMutex
@@ -88,9 +92,23 @@ func NewServer(cfg Config) (*Server, error) {
 	// Create broadcaster for file events
 	bc := broadcaster.New()
 
+	// Create watcher for filesystem events
+	w, err := watcher.New(st)
+	if err != nil {
+		_ = st.Close()
+		_ = listener.Close()
+		return nil, err
+	}
+	w.SetBroadcaster(bc)
+	w.SetMinLargeFileSize(largeFileThreshold)
+
+	// Create context for watcher goroutine
+	watcherCtx, watcherStop := context.WithCancel(context.Background())
+
 	// Create service with broadcaster and optional config
 	svc := NewServiceWithBroadcaster(st, bc)
 	svc.indexer.MinLargeFileSize = largeFileThreshold
+	svc.SetWatcher(w)
 
 	srv := &Server{
 		cfg:         cfg,
@@ -99,10 +117,16 @@ func NewServer(cfg Config) (*Server, error) {
 		store:       st,
 		service:     svc,
 		broadcaster: bc,
+		watcher:     w,
+		watcherCtx:  watcherCtx,
+		watcherStop: watcherStop,
 	}
 
 	// Register gRPC service
 	sweepv1.RegisterSweepDaemonServer(srv.grpc, svc)
+
+	// Start watcher event loop in background
+	go srv.watcher.Run(srv.watcherCtx, nil)
 
 	// Check if migration is needed and start it in background
 	if st.NeedsMigration() {
@@ -128,6 +152,14 @@ func (s *Server) Close() error {
 	// Cancel any running migration
 	if s.migrationCancel != nil {
 		s.migrationCancel()
+	}
+
+	// Stop watcher
+	if s.watcherStop != nil {
+		s.watcherStop()
+	}
+	if s.watcher != nil {
+		_ = s.watcher.Close()
 	}
 
 	s.grpc.GracefulStop()

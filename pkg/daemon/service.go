@@ -14,6 +14,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
+	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
 )
 
 // indexState tracks the state of an index operation.
@@ -32,6 +33,7 @@ type Service struct {
 	store       *store.Store
 	indexer     *indexer.Indexer
 	broadcaster *broadcaster.Broadcaster
+	watcher     *watcher.Watcher
 	startTime   time.Time
 
 	// Track indexing state per path
@@ -58,6 +60,11 @@ func NewServiceWithBroadcaster(s *store.Store, b *broadcaster.Broadcaster) *Serv
 		startTime:   time.Now(),
 		indexStates: make(map[string]*indexState),
 	}
+}
+
+// SetWatcher sets the filesystem watcher for the service.
+func (s *Service) SetWatcher(w *watcher.Watcher) {
+	s.watcher = w
 }
 
 // GetLargeFiles streams large files matching the criteria.
@@ -183,6 +190,10 @@ func (s *Service) runIndexing(ctx context.Context, path string) {
 			files:    result.FilesIndexed,
 			dirs:     result.DirsIndexed,
 		}
+		// Start watching the indexed path for changes
+		if s.watcher != nil {
+			_ = s.watcher.Watch(path)
+		}
 	}
 	s.indexMu.Unlock()
 }
@@ -272,6 +283,11 @@ func (s *Service) ClearCache(_ context.Context, req *sweepv1.ClearCacheRequest) 
 		files, dirs, _ := s.store.CountEntries(reqPath)
 		count = files + dirs
 		_ = s.store.DeletePrefix(reqPath)
+	}
+
+	// Stop watching the cleared path
+	if s.watcher != nil && reqPath != "" {
+		s.watcher.Unwatch(reqPath)
 	}
 
 	s.indexMu.Lock()

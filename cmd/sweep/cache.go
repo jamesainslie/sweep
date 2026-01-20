@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/adrg/xdg"
+	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -19,23 +22,55 @@ Cache data is stored in the XDG cache directory (typically ~/.cache/sweep/metada
 }
 
 var cacheClearCmd = &cobra.Command{
-	Use:   "clear",
-	Short: "Clear all cached data",
-	Long:  `Removes all cached metadata. The next scan will perform a full directory traversal.`,
+	Use:   "clear [path]",
+	Short: "Clear cached data",
+	Long: `Removes cached metadata. If a path is specified, only clears cache for that path.
+Without a path, clears all cached data.
+The next scan will perform a full directory traversal.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var clearedLocal, clearedDaemon bool
+
+		// Clear local file cache
 		cachePath := filepath.Join(xdg.CacheHome, "sweep", "metadata")
+		if _, err := os.Stat(cachePath); err == nil {
+			if err := os.RemoveAll(cachePath); err != nil {
+				return fmt.Errorf("failed to clear local cache: %w", err)
+			}
+			clearedLocal = true
+		}
 
-		// Check if cache exists
-		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		// Clear daemon cache if daemon is running
+		var clearPath string
+		if len(args) > 0 {
+			var err error
+			clearPath, err = filepath.Abs(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid path: %w", err)
+			}
+		}
+
+		if client.IsDaemonRunning(client.DefaultPIDPath()) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			daemonClient, err := client.ConnectWithContext(ctx, client.DefaultSocketPath())
+			if err == nil {
+				defer daemonClient.Close()
+				if _, err := daemonClient.ClearCache(ctx, clearPath); err == nil {
+					clearedDaemon = true
+				}
+			}
+		}
+
+		if clearedLocal || clearedDaemon {
+			if clearPath != "" {
+				fmt.Printf("Cache cleared for %s.\n", clearPath)
+			} else {
+				fmt.Println("Cache cleared.")
+			}
+		} else {
 			fmt.Println("Cache is already empty.")
-			return nil
 		}
-
-		if err := os.RemoveAll(cachePath); err != nil {
-			return fmt.Errorf("failed to clear cache: %w", err)
-		}
-
-		fmt.Println("Cache cleared.")
 		return nil
 	},
 }

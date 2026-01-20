@@ -277,6 +277,7 @@ func (s *Store) Delete(path string) error {
 }
 
 // DeletePrefix removes all entries with the given path prefix.
+// Also removes corresponding entries from the large files index.
 func (s *Store) DeletePrefix(prefix string) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -287,7 +288,22 @@ func (s *Store) DeletePrefix(prefix string) error {
 		var keysToDelete [][]byte
 		prefixBytes := []byte(prefix)
 
+		// Delete regular entries
 		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			key := it.Item().KeyCopy(nil)
+			keysToDelete = append(keysToDelete, key)
+		}
+
+		// Also delete from large files index
+		largeFilesPrefix := []byte(prefixLargeFile + prefix)
+		for it.Seek(largeFilesPrefix); it.ValidForPrefix(largeFilesPrefix); it.Next() {
+			key := it.Item().KeyCopy(nil)
+			keysToDelete = append(keysToDelete, key)
+		}
+
+		// Also delete metadata for this path
+		metaKey := []byte(prefixMeta + prefix)
+		for it.Seek(metaKey); it.ValidForPrefix(metaKey); it.Next() {
 			key := it.Item().KeyCopy(nil)
 			keysToDelete = append(keysToDelete, key)
 		}

@@ -15,12 +15,13 @@ import (
 
 // Watcher watches directories for filesystem changes and updates the store.
 type Watcher struct {
-	store       *store.Store
-	watcher     *fsnotify.Watcher
-	paths       map[string]bool
-	mu          sync.RWMutex
-	closed      bool
-	broadcaster *broadcaster.Broadcaster
+	store              *store.Store
+	watcher            *fsnotify.Watcher
+	paths              map[string]bool
+	mu                 sync.RWMutex
+	closed             bool
+	broadcaster        *broadcaster.Broadcaster
+	minLargeFileSize   int64 // Threshold for large files index
 }
 
 // New creates a new Watcher.
@@ -35,6 +36,20 @@ func New(s *store.Store) (*Watcher, error) {
 		watcher: fsw,
 		paths:   make(map[string]bool),
 	}, nil
+}
+
+// SetBroadcaster sets the broadcaster for sending file events to clients.
+func (w *Watcher) SetBroadcaster(b *broadcaster.Broadcaster) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.broadcaster = b
+}
+
+// SetMinLargeFileSize sets the threshold for large files.
+func (w *Watcher) SetMinLargeFileSize(size int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.minLargeFileSize = size
 }
 
 // Watch starts watching a path recursively.
@@ -207,6 +222,11 @@ func (w *Watcher) handleCreate(path string) {
 
 	_ = w.store.Put(entry)
 
+	// Update large files index if this is a large file
+	if !info.IsDir() && w.minLargeFileSize > 0 && info.Size() >= w.minLargeFileSize {
+		_ = w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix())
+	}
+
 	// Notify broadcaster for files (not directories)
 	if w.broadcaster != nil && !info.IsDir() {
 		w.broadcaster.Notify(path, broadcaster.EventCreated, info.Size())
@@ -229,6 +249,16 @@ func (w *Watcher) handleWrite(path string) {
 	}
 
 	_ = w.store.Put(entry)
+
+	// Update large files index based on new size
+	if !info.IsDir() && w.minLargeFileSize > 0 {
+		if info.Size() >= w.minLargeFileSize {
+			_ = w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix())
+		} else {
+			// File shrank below threshold, remove from large files index
+			_ = w.store.RemoveLargeFile(path)
+		}
+	}
 
 	// Notify broadcaster for files (not directories)
 	if w.broadcaster != nil && !info.IsDir() {
@@ -275,11 +305,6 @@ func (w *Watcher) Close() error {
 	w.closed = true
 	w.paths = make(map[string]bool)
 	return w.watcher.Close()
-}
-
-// SetBroadcaster sets the broadcaster for file event notifications.
-func (w *Watcher) SetBroadcaster(b *broadcaster.Broadcaster) {
-	w.broadcaster = b
 }
 
 // isSubPath checks if path is under parent directory.

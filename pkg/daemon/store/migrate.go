@@ -113,7 +113,7 @@ func (s *Store) migrateToV2(ctx context.Context, largeFileThreshold int64, onPro
 			err := item.Value(func(val []byte) error {
 				var entry Entry
 				if err := json.Unmarshal(val, &entry); err != nil {
-					return nil // Skip invalid entries
+					return nil //nolint:nilerr // intentionally skip malformed entries
 				}
 
 				if entry.IsDir {

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
@@ -128,7 +129,7 @@ func TestMigrateCancellation(t *testing.T) {
 	cancel()
 
 	_, err = s.Migrate(ctx, 10*1024*1024, nil)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Expected context.Canceled error, got %v", err)
 	}
 }

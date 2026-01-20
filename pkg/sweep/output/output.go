@@ -157,7 +157,6 @@ func (r *Registry) Register(name string, factory FormatterFactory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.factories[name] = factory
-	logger.Debug("registered formatter", "name", name)
 }
 
 // Get returns a new formatter instance by name.

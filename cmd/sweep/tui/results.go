@@ -305,9 +305,10 @@ var (
 	rowNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC"))
 
-	// Checkbox styles
-	checkboxChecked   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("✓")
-	checkboxUnchecked = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○")
+	// Checkbox styles - use a 3-char wide column with centered checkbox
+	checkboxStyle = lipgloss.NewStyle().Width(3).Align(lipgloss.Center)
+	checkboxChecked   = checkboxStyle.Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("✓")
+	checkboxUnchecked = checkboxStyle.Foreground(lipgloss.Color("#666666")).Render("○")
 
 	// Size style
 	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)
@@ -333,7 +334,7 @@ func (m ResultModel) renderFileList(width int) string {
 		filename := filepath.Base(file.Path)
 
 		// Calculate available width for filename
-		// Layout: " " + checkbox + " " + size + "  " + filename = 3 + 10 + 2 = 15 chars before filename
+		// Layout: checkbox(3) + size(10) + "  " + filename = 3 + 10 + 2 = 15 chars before filename
 		filenameWidth := width - 15
 		if filenameWidth < 20 {
 			filenameWidth = 20
@@ -345,12 +346,12 @@ func (m ResultModel) renderFileList(width int) string {
 		// For highlighted row, use plain text so background spans full width
 		// For normal rows, use styled checkbox and size
 		if isCursor {
-			checkbox := "✓"
+			checkbox := " ✓ "
 			if !isSelected {
-				checkbox = "○"
+				checkbox = " ○ "
 			}
 			size := padLeft(types.FormatSize(file.Size), 10)
-			row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
+			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
 			var checkbox string
@@ -360,7 +361,7 @@ func (m ResultModel) renderFileList(width int) string {
 				checkbox = checkboxUnchecked
 			}
 			size := sizeStyle.Render(types.FormatSize(file.Size))
-			row := fmt.Sprintf(" %s %s  %s", checkbox, size, filename)
+			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

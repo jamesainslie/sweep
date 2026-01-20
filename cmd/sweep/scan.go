@@ -1,15 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +17,8 @@ import (
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
+	"github.com/jamesainslie/sweep/pkg/sweep/filter"
+	"github.com/jamesainslie/sweep/pkg/sweep/output"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/tuner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
@@ -26,7 +27,7 @@ import (
 )
 
 // runScan is the main scan command handler.
-func runScan(cmd *cobra.Command, args []string) error {
+func runScan(_ *cobra.Command, args []string) error {
 	// Determine scan path
 	scanPath := "."
 	if len(args) > 0 {
@@ -108,7 +109,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 	noCache := viper.GetBool("no_cache")
 	if !noCache {
 		cachePath := filepath.Join(xdg.CacheHome, "sweep", "metadata")
-		var err error
 		c, err = cache.Open(cachePath)
 		if err != nil {
 			// Log warning, continue without cache
@@ -131,17 +131,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Determine output mode
-	jsonOutput := viper.GetBool("json")
 	noInteractive := viper.GetBool("no_interactive")
+	outFormat := viper.GetString("output")
 
-	// If JSON output is requested, force non-interactive mode
-	if jsonOutput {
+	// If output format is explicitly set (not default), force non-interactive mode
+	if outFormat != "" && outFormat != "pretty" {
 		noInteractive = true
 	}
 
 	// Run scan
 	if noInteractive {
-		return runNonInteractiveScan(opts, c, jsonOutput)
+		return runNonInteractiveScan(opts, c)
 	}
 
 	// Interactive TUI mode
@@ -153,6 +153,12 @@ func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 	dryRun := viper.GetBool("dry_run")
 	noDaemon := viper.GetBool("no_daemon")
 
+	// Build filter from CLI flags
+	f, err := buildFilter()
+	if err != nil {
+		return fmt.Errorf("failed to build filter: %w", err)
+	}
+
 	tuiOpts := tui.Options{
 		Root:        opts.Root,
 		MinSize:     opts.MinSize,
@@ -162,6 +168,7 @@ func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 		DryRun:      dryRun,
 		NoDaemon:    noDaemon,
 		Cache:       c,
+		Filter:      f,
 	}
 
 	return tui.Run(tuiOpts)
@@ -185,7 +192,34 @@ type scanError struct {
 }
 
 // runNonInteractiveScan runs the scan in non-interactive mode.
-func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache, jsonOutput bool) error {
+func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache) error {
+	// Build filter from CLI flags
+	f, err := buildFilter()
+	if err != nil {
+		return fmt.Errorf("failed to build filter: %w", err)
+	}
+
+	// Get output formatter
+	outFormat := viper.GetString("output")
+	if outFormat == "" {
+		outFormat = "pretty"
+	}
+
+	var formatter output.Formatter
+	if outFormat == "template" {
+		// Handle custom template format
+		tmplStr := viper.GetString("template")
+		if tmplStr == "" {
+			return fmt.Errorf("--template is required when using -o template")
+		}
+		formatter = output.NewTemplateFormatter(tmplStr)
+	} else {
+		formatter, err = output.Get(outFormat)
+		if err != nil {
+			return fmt.Errorf("unknown output format %q: available formats are %v", outFormat, output.Available())
+		}
+	}
+
 	// Setup context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -193,54 +227,75 @@ func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache, jsonOutput bo
 	// Handle interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	interrupted := false
 	go func() {
 		<-sigChan
 		printInfo("\nInterrupted, stopping scan...")
+		interrupted = true
 		cancel()
 	}()
 
 	startTime := time.Now()
 
-	// Try daemon first if available
+	// Determine daemon usage
 	noDaemon := viper.GetBool("no_daemon")
+	forceScn := viper.GetBool("force_scan")
+	forceDmn := viper.GetBool("force_daemon")
+
+	// force-scan overrides force-daemon
+	if forceScn {
+		noDaemon = true
+	}
+
+	var internalResult *scanResult
+	usedDaemon := false
+
+	// Try daemon first if available
 	if !noDaemon {
-		result, usedDaemon := tryDaemonScan(ctx, opts, jsonOutput)
-		if usedDaemon {
-			result.Elapsed = time.Since(startTime)
-			if jsonOutput {
-				return outputJSON(result)
+		internalResult, usedDaemon = tryDaemonScan(ctx, opts, f)
+	}
+
+	// Handle force-daemon failure
+	if forceDmn && !usedDaemon {
+		return fmt.Errorf("daemon unavailable but --force-daemon was specified")
+	}
+
+	// Fallback to direct scan if daemon not used
+	if !usedDaemon {
+		if !getQuiet() {
+			printInfo("Scanning %s for files >= %s...", opts.Root, types.FormatSize(opts.MinSize))
+		}
+
+		// Run the scan using the fast scanner
+		internalResult, err = performScan(ctx, opts, c)
+		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				printInfo("Scan cancelled")
+				return nil
 			}
-			return outputTable(result)
+			return fmt.Errorf("scan failed: %w", err)
 		}
 	}
 
-	// Fallback to direct scan
-	if !jsonOutput && !getQuiet() {
-		printInfo("Scanning %s for files >= %s...", opts.Root, types.FormatSize(opts.MinSize))
-	}
+	elapsed := time.Since(startTime)
+	internalResult.Elapsed = elapsed
 
-	// Run the scan using the fast scanner
-	result, err := performScan(ctx, opts, c)
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			printInfo("Scan cancelled")
-			return nil
-		}
-		return fmt.Errorf("scan failed: %w", err)
-	}
-
-	result.Elapsed = time.Since(startTime)
+	// Convert to output.Result and apply filter
+	result := convertToOutputResult(internalResult, f, opts.Root, usedDaemon, interrupted)
 
 	// Output results
-	if jsonOutput {
-		return outputJSON(result)
+	var buf bytes.Buffer
+	if err := formatter.Format(&buf, result); err != nil {
+		return fmt.Errorf("failed to format output: %w", err)
 	}
-	return outputTable(result)
+	fmt.Print(buf.String())
+
+	return nil
 }
 
 // tryDaemonScan attempts to use the daemon for scanning.
 // Returns the result and a boolean indicating if the daemon was used.
-func tryDaemonScan(ctx context.Context, opts types.ScanOptions, _ bool) (*scanResult, bool) {
+func tryDaemonScan(ctx context.Context, opts types.ScanOptions, f *filter.Filter) (*scanResult, bool) {
 	// Check if daemon is running
 	pidPath := client.DefaultPIDPath()
 	if !client.IsDaemonRunning(pidPath) {
@@ -266,6 +321,23 @@ func tryDaemonScan(ctx context.Context, opts types.ScanOptions, _ bool) (*scanRe
 		return nil, false
 	}
 
+	// Check max-age if specified
+	maxAgeStr := viper.GetString("max_age")
+	if maxAgeStr != "" {
+		maxAgeDur, parseErr := filter.ParseDuration(maxAgeStr)
+		if parseErr == nil {
+			status, _ := daemonClient.GetIndexStatus(ctx, opts.Root)
+			if status != nil && !status.LastUpdated.IsZero() {
+				indexAge := time.Since(status.LastUpdated)
+				if indexAge > maxAgeDur {
+					printVerbose("Index too old (%v > %v), triggering background indexing", indexAge, maxAgeDur)
+					go triggerBackgroundIndexing(opts.Root) //nolint:contextcheck // intentionally uses fresh context for background work
+					return nil, false
+				}
+			}
+		}
+	}
+
 	if !ready {
 		printVerbose("Index not ready for %s, triggering background indexing", opts.Root)
 		// Trigger indexing in background for next time (uses fresh context)
@@ -275,7 +347,17 @@ func tryDaemonScan(ctx context.Context, opts types.ScanOptions, _ bool) (*scanRe
 
 	// Index is ready, query the daemon
 	printVerbose("Using daemon index for %s", opts.Root)
-	files, err := daemonClient.GetLargeFiles(ctx, opts.Root, opts.MinSize, opts.Exclude, 0)
+	// Pass filter limit to daemon for server-side limiting
+	limit := 0
+	if f != nil && f.Limit > 0 {
+		// Request more than needed since we'll filter client-side
+		// The daemon only filters by min-size and exclude patterns
+		limit = f.Limit * 10 // Request extra for client-side filtering
+		if limit > 10000 {
+			limit = 10000 // Cap at reasonable limit
+		}
+	}
+	files, err := daemonClient.GetLargeFiles(ctx, opts.Root, opts.MinSize, opts.Exclude, limit)
 	if err != nil {
 		printVerbose("Failed to query daemon: %v", err)
 		return nil, false
@@ -288,8 +370,8 @@ func tryDaemonScan(ctx context.Context, opts types.ScanOptions, _ bool) (*scanRe
 
 	// Calculate total size
 	var totalSize int64
-	for _, f := range files {
-		totalSize += f.Size
+	for _, file := range files {
+		totalSize += file.Size
 	}
 
 	// Get index status for statistics
@@ -379,72 +461,81 @@ func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*
 	return result, nil
 }
 
-// outputJSON outputs the scan result as JSON.
-func outputJSON(result *scanResult) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(result)
+// convertToOutputResult converts internal scanResult to output.Result and applies the filter.
+func convertToOutputResult(r *scanResult, f *filter.Filter, source string, daemonUp, interrupted bool) *output.Result {
+	// Convert types.FileInfo to filter.FileInfo for filtering
+	filterFiles := make([]filter.FileInfo, len(r.Files))
+	for i, file := range r.Files {
+		filterFiles[i] = filter.FileInfo{
+			Path:    file.Path,
+			Name:    filepath.Base(file.Path),
+			Dir:     filepath.Dir(file.Path),
+			Ext:     filepath.Ext(file.Path),
+			Size:    file.Size,
+			ModTime: file.ModTime,
+			Mode:    file.Mode,
+			Owner:   file.Owner,
+			Depth:   calculateDepth(file.Path, source),
+		}
+	}
+
+	// Apply filter (match, sort, limit)
+	filtered := f.Apply(filterFiles)
+
+	// Convert to output.FileInfo
+	outputFiles := make([]output.FileInfo, len(filtered))
+	now := time.Now()
+	for i, file := range filtered {
+		outputFiles[i] = output.FileInfo{
+			Path:      file.Path,
+			Name:      file.Name,
+			Dir:       file.Dir,
+			Ext:       file.Ext,
+			Size:      file.Size,
+			SizeHuman: types.FormatSize(file.Size),
+			ModTime:   file.ModTime,
+			Age:       now.Sub(file.ModTime),
+			Perms:     file.Mode.Perm().String(),
+			Mode:      file.Mode,
+			Owner:     file.Owner,
+			Depth:     file.Depth,
+		}
+	}
+
+	// Build warnings from errors
+	var warnings []string
+	for _, e := range r.Errors {
+		warnings = append(warnings, fmt.Sprintf("%s: %s", e.Path, e.Error))
+	}
+
+	return &output.Result{
+		Files: outputFiles,
+		Stats: output.ScanStats{
+			DirsScanned:  r.DirsScanned,
+			FilesScanned: r.FilesScanned,
+			LargeFiles:   int64(len(r.Files)),
+			Duration:     r.Elapsed,
+		},
+		Source:      source,
+		DaemonUp:    daemonUp,
+		TotalFiles:  len(outputFiles),
+		Warnings:    warnings,
+		Interrupted: interrupted,
+	}
 }
 
-// outputTable outputs the scan result as a formatted table.
-func outputTable(result *scanResult) error {
-	if len(result.Files) == 0 {
-		printInfo("No files found matching criteria.")
-		printInfo("\nScanned %d directories, %d files in %v",
-			result.DirsScanned, result.FilesScanned, result.Elapsed.Round(time.Millisecond))
-		// Print cache metrics if available
-		totalCacheOps := result.CacheHits + result.CacheMisses
-		if totalCacheOps > 0 {
-			hitRate := float64(result.CacheHits) / float64(totalCacheOps) * 100
-			printInfo("Cache: %d hits, %d misses (%.1f%% hit rate)",
-				result.CacheHits, result.CacheMisses, hitRate)
-		}
-		return nil
+// calculateDepth calculates the directory depth relative to the root.
+func calculateDepth(path, root string) int {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return 0
 	}
-
-	// Print header
-	fmt.Printf("\n%-12s  %s\n", "SIZE", "PATH")
-	fmt.Println(strings.Repeat("-", 80))
-
-	// Print files (limit to 50 for readability)
-	limit := 50
-	if len(result.Files) < limit {
-		limit = len(result.Files)
-	}
-
-	for i := 0; i < limit; i++ {
-		file := result.Files[i]
-		fmt.Printf("%-12s  %s\n", types.FormatSize(file.Size), file.Path)
-	}
-
-	if len(result.Files) > limit {
-		fmt.Printf("\n... and %d more files\n", len(result.Files)-limit)
-	}
-
-	// Print summary
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("\nFound %d large files totaling %s\n",
-		len(result.Files), types.FormatSize(result.TotalSize))
-	fmt.Printf("Scanned %d directories, %d files in %v\n",
-		result.DirsScanned, result.FilesScanned, result.Elapsed.Round(time.Millisecond))
-
-	// Print cache metrics if available
-	totalCacheOps := result.CacheHits + result.CacheMisses
-	if totalCacheOps > 0 {
-		hitRate := float64(result.CacheHits) / float64(totalCacheOps) * 100
-		fmt.Printf("Cache: %d hits, %d misses (%.1f%% hit rate)\n",
-			result.CacheHits, result.CacheMisses, hitRate)
-	}
-
-	if len(result.Errors) > 0 {
-		fmt.Printf("\n%d errors encountered during scan (use --verbose for details)\n", len(result.Errors))
-		if getVerbose() {
-			fmt.Println("\nErrors:")
-			for _, e := range result.Errors {
-				fmt.Printf("  %s: %s\n", e.Path, e.Error)
-			}
+	// Count path separators
+	depth := 0
+	for _, c := range rel {
+		if c == filepath.Separator {
+			depth++
 		}
 	}
-
-	return nil
+	return depth
 }

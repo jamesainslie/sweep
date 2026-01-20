@@ -106,6 +106,16 @@ type Config struct {
 	// Components maps component names to their log levels.
 	// This allows per-component log level overrides.
 	Components map[string]string
+
+	// ConsoleLevel enables console output at the specified level.
+	// Empty string disables console output (default).
+	// When set, logs at this level and above go to stderr.
+	ConsoleLevel string
+
+	// TUIMode enables TUI-specific behavior:
+	// - Disables console output (TUI owns the screen)
+	// - Enables ring buffer for log panel
+	TUIMode bool
 }
 
 // LogEntry represents a single log entry for TUI subscription.
@@ -124,8 +134,10 @@ type LogEntry struct {
 }
 
 // Logger wraps charmbracelet/log with component identification.
+// It can output to both file and console with different formatting.
 type Logger struct {
-	inner     *log.Logger
+	file      *log.Logger // Always present, writes to file (or io.Discard before Init)
+	console   *log.Logger // Optional, writes to stderr with shorter timestamps
 	component string
 }
 
@@ -149,21 +161,17 @@ func (l *Logger) Error(msg string, args ...interface{}) {
 	l.log(LevelError, msg, args...)
 }
 
-// log is the internal logging method that broadcasts to subscribers.
+// log is the internal logging method that writes to file, console, and broadcasts.
 func (l *Logger) log(level Level, msg string, args ...interface{}) {
-	// Log to the underlying logger
-	switch level {
-	case LevelDebug:
-		l.inner.Debug(msg, args...)
-	case LevelInfo:
-		l.inner.Info(msg, args...)
-	case LevelWarn:
-		l.inner.Warn(msg, args...)
-	case LevelError:
-		l.inner.Error(msg, args...)
+	// Log to file
+	logTo(l.file, level, msg, args...)
+
+	// Log to console if configured
+	if l.console != nil {
+		logTo(l.console, level, msg, args...)
 	}
 
-	// Broadcast to subscribers
+	// Broadcast to subscribers (for TUI log panel)
 	globalState.broadcast(LogEntry{
 		Time:      time.Now(),
 		Level:     level,
@@ -172,12 +180,30 @@ func (l *Logger) log(level Level, msg string, args ...interface{}) {
 	})
 }
 
+// logTo writes a log message to the given logger at the specified level.
+func logTo(logger *log.Logger, level Level, msg string, args ...interface{}) {
+	switch level {
+	case LevelDebug:
+		logger.Debug(msg, args...)
+	case LevelInfo:
+		logger.Info(msg, args...)
+	case LevelWarn:
+		logger.Warn(msg, args...)
+	case LevelError:
+		logger.Error(msg, args...)
+	}
+}
+
 // With returns a new logger with additional context.
 func (l *Logger) With(args ...interface{}) *Logger {
-	return &Logger{
-		inner:     l.inner.With(args...),
+	newLogger := &Logger{
+		file:      l.file.With(args...),
 		component: l.component,
 	}
+	if l.console != nil {
+		newLogger.console = l.console.With(args...)
+	}
+	return newLogger
 }
 
 // state holds the global logging state.
@@ -189,6 +215,14 @@ type state struct {
 	components  map[string]Level
 	loggers     map[string]*Logger
 	subscribers map[chan LogEntry]struct{}
+
+	// Console output settings
+	consoleEnabled bool
+	consoleLevel   Level
+	tuiMode        bool
+
+	// TUI log buffer (only created when TUIMode is true)
+	logBuffer *LogBuffer
 }
 
 var globalState = &state{
@@ -199,6 +233,7 @@ var globalState = &state{
 
 // Init initializes the logging system with the given configuration.
 // It must be called before any logging operations.
+// Before Init() is called, all loggers write to io.Discard (silent).
 func Init(cfg Config) error {
 	globalState.mu.Lock()
 	defer globalState.mu.Unlock()
@@ -230,6 +265,25 @@ func Init(cfg Config) error {
 		globalState.components[comp] = parsedLevel
 	}
 
+	// Configure console output
+	globalState.tuiMode = cfg.TUIMode
+	globalState.consoleEnabled = false
+	if cfg.ConsoleLevel != "" && !cfg.TUIMode {
+		consoleLevel, err := ParseLevel(cfg.ConsoleLevel)
+		if err != nil {
+			return fmt.Errorf("parsing console level: %w", err)
+		}
+		globalState.consoleLevel = consoleLevel
+		globalState.consoleEnabled = true
+	}
+
+	// Create log buffer for TUI mode
+	if cfg.TUIMode {
+		globalState.logBuffer = NewLogBuffer(DefaultBufferSize)
+	} else {
+		globalState.logBuffer = nil
+	}
+
 	// Determine log path
 	path := cfg.Path
 	if path == "" {
@@ -244,12 +298,19 @@ func Init(cfg Config) error {
 	globalState.writer = writer
 
 	globalState.initialized = true
+
+	// Recreate all existing loggers with the new configuration
+	for component := range globalState.loggers {
+		globalState.loggers[component] = createLogger(component)
+	}
+
 	return nil
 }
 
 // Get returns a logger for the given component.
 // If the component has a level override in the config, it uses that level.
 // Otherwise, it uses the default level.
+// Before Init() is called, loggers write to io.Discard (silent).
 func Get(component string) *Logger {
 	globalState.mu.RLock()
 	if logger, ok := globalState.loggers[component]; ok {
@@ -266,19 +327,34 @@ func Get(component string) *Logger {
 		return logger
 	}
 
+	logger := createLogger(component)
+	globalState.loggers[component] = logger
+	return logger
+}
+
+// createLogger creates a new logger for the given component.
+// Must be called with globalState.mu held.
+func createLogger(component string) *Logger {
 	// Determine log level for this component
 	level := globalState.level
 	if compLevel, ok := globalState.components[component]; ok {
 		level = compLevel
 	}
 
-	// Create the underlying charmbracelet logger
-	var writer io.Writer = os.Stderr
-	if globalState.writer != nil {
-		writer = globalState.writer
+	// Before Init(), use io.Discard (silent)
+	if !globalState.initialized {
+		fileLogger := log.NewWithOptions(io.Discard, log.Options{
+			Level:  level.toCharmLevel(),
+			Prefix: component,
+		})
+		return &Logger{
+			file:      fileLogger,
+			component: component,
+		}
 	}
 
-	inner := log.NewWithOptions(writer, log.Options{
+	// Create file logger (always present after Init)
+	fileLogger := log.NewWithOptions(globalState.writer, log.Options{
 		Level:           level.toCharmLevel(),
 		ReportCaller:    false,
 		ReportTimestamp: true,
@@ -287,11 +363,23 @@ func Get(component string) *Logger {
 	})
 
 	logger := &Logger{
-		inner:     inner,
+		file:      fileLogger,
 		component: component,
 	}
 
-	globalState.loggers[component] = logger
+	// Add console logger if enabled (and not in TUI mode)
+	if globalState.consoleEnabled && !globalState.tuiMode {
+		// Console uses shorter timestamp format
+		consoleLogger := log.NewWithOptions(os.Stderr, log.Options{
+			Level:           globalState.consoleLevel.toCharmLevel(),
+			ReportCaller:    false,
+			ReportTimestamp: true,
+			TimeFormat:      "15:04:05", // HH:MM:SS only for console
+			Prefix:          component,
+		})
+		logger.console = consoleLogger
+	}
+
 	return logger
 }
 
@@ -353,11 +441,17 @@ func Unsubscribe(ch <-chan LogEntry) {
 	}
 }
 
-// broadcast sends a log entry to all subscribers.
+// broadcast sends a log entry to all subscribers and the log buffer.
 func (s *state) broadcast(entry LogEntry) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Add to log buffer if in TUI mode
+	if s.logBuffer != nil {
+		s.logBuffer.Add(entry)
+	}
+
+	// Send to channel subscribers
 	for ch := range s.subscribers {
 		select {
 		case ch <- entry:
@@ -365,6 +459,14 @@ func (s *state) broadcast(entry LogEntry) {
 			// Drop message if channel is full to prevent blocking
 		}
 	}
+}
+
+// GetLogBuffer returns the log buffer for TUI display.
+// Returns nil if not in TUI mode or not initialized.
+func GetLogBuffer() *LogBuffer {
+	globalState.mu.RLock()
+	defer globalState.mu.RUnlock()
+	return globalState.logBuffer
 }
 
 // DefaultLogPath returns the default log file path.

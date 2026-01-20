@@ -217,64 +217,180 @@ func WriteDefault() error {
 		return err
 	}
 
-	defaultConfig := fmt.Sprintf(`# Sweep Disk Analyzer Configuration
+	defaultConfig := fmt.Sprintf(`# =============================================================================
+# Sweep Disk Analyzer Configuration
+# =============================================================================
+# Location: ~/.config/sweep/config.yaml (or $XDG_CONFIG_HOME/sweep/config.yaml)
+# Regenerate defaults: sweep config init
+# View current config: sweep config show
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Scan Settings
+# -----------------------------------------------------------------------------
 
 # Minimum file size to include in scans
+# Format: number with unit suffix (B, KB, MB, GB, TB) - case insensitive
+# Examples: 100MB, 1GB, 500KB, 1024B
+# CLI override: sweep -s <size> or sweep --min-size <size>
 min_size: %s
 
 # Default path to scan when none is specified
+# Can be absolute path or "." for current directory
+# CLI override: sweep <path>
 default_path: %s
 
-# Paths to exclude from scanning
+# Paths to exclude from scanning (glob patterns supported)
+# These paths are skipped entirely during directory traversal
+# Common exclusions: virtual filesystems, build artifacts, caches
 exclude:
   - /proc
   - /sys
   - /dev
+  # Uncomment to exclude additional paths:
+  # - /tmp
+  # - "**/node_modules"
+  # - "**/.git"
+  # - "**/target"        # Rust build artifacts
+  # - "**/vendor"        # Go vendor directory
 
-# Worker pool configuration
+# -----------------------------------------------------------------------------
+# Worker Pool Configuration
+# -----------------------------------------------------------------------------
+# Controls parallelism during scans. Higher values = faster scans but more I/O
+# Recommended: dir workers = CPU cores / 2, file workers = CPU cores
+
 workers:
+  # Number of directory traversal workers
+  # Valid range: 1-32
   dir: %d
+
+  # Number of file stat workers
+  # Valid range: 1-64
   file: %d
 
-# Manifest settings for tracking scan history
+# -----------------------------------------------------------------------------
+# Manifest Settings
+# -----------------------------------------------------------------------------
+# The manifest tracks scan history for incremental updates and caching
+
 manifest:
+  # Enable manifest tracking
   enabled: true
+
+  # Path to manifest file
+  # Empty string uses default: $XDG_DATA_HOME/sweep/.manifest
   path: %s
+
+  # Days to retain manifest entries before cleanup
+  # Valid range: 1-365
   retention_days: %d
 
-# Logging configuration
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+
 logging:
-  # Log level: debug, info, warn, error
+  # Global log level
+  # Valid values: debug, info, warn, error
+  # debug: verbose output for troubleshooting
+  # info: normal operation messages
+  # warn: potential issues only
+  # error: errors only
   level: info
-  # Log file path (empty means use default: $XDG_STATE_HOME/sweep/sweep.log)
+
+  # Log file path
+  # Empty string uses default: $XDG_STATE_HOME/sweep/sweep.log
+  # On macOS: ~/Library/Application Support/sweep/sweep.log
   path: ""
+
   # Log rotation settings
   rotation:
+    # Maximum size before rotation
+    # Format: number with unit suffix (KB, MB, GB)
     max_size: 10MB
-    max_age: 30       # days
-    max_backups: 5
-    daily: true
-  # Per-component log levels
-  components:
-    daemon: info
-    watcher: warn
-    scanner: info
-    tui: info
 
-# Daemon configuration
+    # Maximum age in days before deletion
+    # Valid range: 1-365
+    max_age: 30
+
+    # Maximum number of backup files to keep
+    # Valid range: 1-100
+    max_backups: 5
+
+    # Enable daily rotation regardless of size
+    daily: true
+
+  # Per-component log levels (override global level)
+  # Valid values: debug, info, warn, error
+  components:
+    daemon: info      # Background daemon process
+    watcher: warn     # File system watcher
+    scanner: info     # Directory scanner
+    tui: info         # Terminal UI
+
+# -----------------------------------------------------------------------------
+# Daemon Configuration
+# -----------------------------------------------------------------------------
+# The daemon provides fast queries by maintaining an in-memory index
+# Start manually: sweepd
+# Query via daemon: sweep (auto-connects if running)
+# Bypass daemon: sweep --no-daemon
+
 daemon:
   # Automatically start daemon when running sweep commands
+  # If false, must start daemon manually with: sweepd
   auto_start: true
-  # Path to sweepd binary (empty means auto-discover: same-dir > GOBIN > GOPATH/bin > PATH)
+
+  # Path to sweepd binary
+  # Empty string uses auto-discovery in order:
+  #   1. Same directory as sweep binary
+  #   2. $GOBIN
+  #   3. $GOPATH/bin
+  #   4. $PATH
   binary_path: ""
-  # Unix socket path (empty means use default: $XDG_DATA_HOME/sweep/sweep.sock)
+
+  # Unix socket path for daemon communication
+  # Empty string uses default: $XDG_DATA_HOME/sweep/sweep.sock
+  # On macOS: ~/Library/Application Support/sweep/sweep.sock
   socket_path: ""
-  # PID file path (empty means use default: $XDG_DATA_HOME/sweep/sweep.pid)
+
+  # PID file path
+  # Empty string uses default: $XDG_DATA_HOME/sweep/sweep.pid
+  # On macOS: ~/Library/Application Support/sweep/sweep.pid
   pid_path: ""
-  # Minimum file size for the large file index (default: 10MB)
-  # Lower values = more files indexed = larger index but faster queries for smaller files
-  # Examples: 1MB, 500KB, 100KB
+
+  # Minimum file size for the large file index
+  # Files smaller than this are NOT indexed by the daemon
+  #
+  # IMPORTANT: Queries with --min-size below this threshold will:
+  #   - Log a warning about potentially incomplete results
+  #   - Only return files >= this threshold from the index
+  #   - Use --no-daemon for accurate small file queries
+  #
+  # Trade-offs:
+  #   - Lower value = more files indexed = larger memory usage, slower startup
+  #   - Higher value = fewer files indexed = faster queries, less memory
+  #
+  # Format: number with unit suffix (KB, MB, GB)
+  # Default (when empty): 10MB
+  # Examples: 1MB, 500KB, 100KB, 50MB
   min_index_size: ""
+
+# =============================================================================
+# CLI Quick Reference
+# =============================================================================
+# sweep                     # Scan default_path with min_size threshold
+# sweep /path               # Scan specific path
+# sweep -s 1GB              # Override min_size for this scan
+# sweep --no-daemon         # Bypass daemon, scan directly
+# sweep -f json             # Output as JSON
+# sweep -f plain            # Plain text output (one file per line)
+# sweep config init         # Regenerate this config with defaults
+# sweep config show         # Display current configuration
+# sweepd                    # Start daemon manually
+# sweepd stop               # Stop running daemon
+# =============================================================================
 `, DefaultMinSize, DefaultPath, DefaultDirWorkers, DefaultFileWorkers, manifestDir, DefaultRetentionDays)
 
 	if err := os.WriteFile(configPath, []byte(defaultConfig), 0o644); err != nil {

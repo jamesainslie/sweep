@@ -305,9 +305,9 @@ var (
 	rowNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC"))
 
-	// Checkbox characters (plain, for use in formatting)
+	// Checkbox characters
 	checkSelectedChar   = "✓"
-	checkUnselectedChar = "·"
+	checkUnselectedChar = "○"
 
 	// Checkbox styles for non-highlighted rows
 	checkboxCheckedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
@@ -346,7 +346,7 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
-		// Build checkbox string (3 chars: space + indicator + space)
+		// Build checkbox column (3 cells wide, centered)
 		var checkChar string
 		if isSelected {
 			checkChar = checkSelectedChar
@@ -357,8 +357,9 @@ func (m ResultModel) renderFileList(width int) string {
 		// For highlighted row, use plain text so background spans full width
 		// For normal rows, use styled checkbox and size
 		if isCursor {
+			checkbox := centerCell(checkChar, 3)
 			size := padLeft(types.FormatSize(file.Size), 10)
-			row := fmt.Sprintf(" %s %s  %s", checkChar, size, filename)
+			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
 			var styledCheck string
@@ -367,8 +368,9 @@ func (m ResultModel) renderFileList(width int) string {
 			} else {
 				styledCheck = checkboxUncheckedStyle.Render(checkChar)
 			}
+			checkbox := centerCell(styledCheck, 3)
 			size := sizeStyle.Render(types.FormatSize(file.Size))
-			row := fmt.Sprintf(" %s %s  %s", styledCheck, size, filename)
+			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

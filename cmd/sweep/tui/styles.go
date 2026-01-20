@@ -172,13 +172,25 @@ func padLeft(s string, width int) string {
 	return repeatChar(' ', width-len(s)) + s
 }
 
-// center centers a string within the given width.
+// center centers a string within the given width (uses byte length).
 func center(s string, width int) string {
 	if len(s) >= width {
 		return s
 	}
 	leftPad := (width - len(s)) / 2
 	rightPad := width - len(s) - leftPad
+	return repeatChar(' ', leftPad) + s + repeatChar(' ', rightPad)
+}
+
+// centerCell centers a string within the given width using display width.
+// This properly handles Unicode characters that may be double-width.
+func centerCell(s string, width int) string {
+	displayWidth := lipgloss.Width(s)
+	if displayWidth >= width {
+		return s
+	}
+	leftPad := (width - displayWidth) / 2
+	rightPad := width - displayWidth - leftPad
 	return repeatChar(' ', leftPad) + s + repeatChar(' ', rightPad)
 }
 

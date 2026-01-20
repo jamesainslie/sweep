@@ -1,6 +1,8 @@
 package filter
 
 import (
+	"cmp"
+	"slices"
 	"strings"
 	"time"
 
@@ -269,4 +271,64 @@ func (f *Filter) matchesAnyPattern(path string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// Sort returns a sorted copy of the files slice based on the filter's sort settings.
+// The original slice is not modified.
+func (f *Filter) Sort(files []FileInfo) []FileInfo {
+	if len(files) == 0 {
+		return []FileInfo{}
+	}
+
+	// Make a copy to avoid modifying the original
+	sorted := make([]FileInfo, len(files))
+	copy(sorted, files)
+
+	slices.SortFunc(sorted, func(a, b FileInfo) int {
+		var result int
+		switch f.SortBy {
+		case SortSize:
+			result = cmp.Compare(a.Size, b.Size)
+		case SortAge:
+			// Sort by age: compare timestamps
+			// ModTime.Compare returns -1 if a is older, 1 if a is newer
+			// We want to treat "age" as the actual age value (older = higher age)
+			// So we negate to get: older files have higher "age" values
+			result = -a.ModTime.Compare(b.ModTime)
+		case SortPath:
+			result = cmp.Compare(a.Path, b.Path)
+		default:
+			result = cmp.Compare(a.Size, b.Size)
+		}
+
+		if f.SortDescending {
+			return -result
+		}
+		return result
+	})
+
+	return sorted
+}
+
+// Apply runs the complete filtering pipeline: Match, Sort, and Limit.
+// It returns a new slice containing only the files that pass all filters,
+// sorted according to the filter settings, and limited to the specified count.
+func (f *Filter) Apply(files []FileInfo) []FileInfo {
+	// Filter
+	var matched []FileInfo
+	for _, fi := range files {
+		if f.Match(fi) {
+			matched = append(matched, fi)
+		}
+	}
+
+	// Sort
+	sorted := f.Sort(matched)
+
+	// Limit
+	if f.Limit > 0 && len(sorted) > f.Limit {
+		return sorted[:f.Limit]
+	}
+
+	return sorted
 }

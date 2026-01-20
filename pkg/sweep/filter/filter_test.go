@@ -570,3 +570,199 @@ func TestMatch_NoFilters(t *testing.T) {
 		t.Error("Match() should return true when no filters are set")
 	}
 }
+
+// TestSort_BySize tests sorting files by size.
+func TestSort_BySize(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/a", Size: 100},
+		{Path: "/b", Size: 300},
+		{Path: "/c", Size: 200},
+	}
+
+	t.Run("descending", func(t *testing.T) {
+		f := New(WithSortBy(SortSize), WithSortDescending(true))
+		sorted := f.Sort(files)
+
+		if sorted[0].Size != 300 || sorted[1].Size != 200 || sorted[2].Size != 100 {
+			t.Errorf("Sort descending = %v", sorted)
+		}
+	})
+
+	t.Run("ascending", func(t *testing.T) {
+		f := New(WithSortBy(SortSize), WithSortDescending(false))
+		sorted := f.Sort(files)
+
+		if sorted[0].Size != 100 || sorted[1].Size != 200 || sorted[2].Size != 300 {
+			t.Errorf("Sort ascending = %v", sorted)
+		}
+	})
+}
+
+// TestSort_ByAge tests sorting files by modification time.
+func TestSort_ByAge(t *testing.T) {
+	now := time.Now()
+	files := []FileInfo{
+		{Path: "/a", ModTime: now.Add(-1 * time.Hour)}, // 1 hour ago
+		{Path: "/b", ModTime: now.Add(-3 * time.Hour)}, // 3 hours ago (oldest)
+		{Path: "/c", ModTime: now.Add(-2 * time.Hour)}, // 2 hours ago
+	}
+
+	t.Run("descending (oldest first)", func(t *testing.T) {
+		f := New(WithSortBy(SortAge), WithSortDescending(true))
+		sorted := f.Sort(files)
+
+		// Descending by age means oldest files first
+		if sorted[0].Path != "/b" || sorted[1].Path != "/c" || sorted[2].Path != "/a" {
+			t.Errorf("Sort by age descending: got paths %s, %s, %s", sorted[0].Path, sorted[1].Path, sorted[2].Path)
+		}
+	})
+
+	t.Run("ascending (newest first)", func(t *testing.T) {
+		f := New(WithSortBy(SortAge), WithSortDescending(false))
+		sorted := f.Sort(files)
+
+		// Ascending by age means newest files first
+		if sorted[0].Path != "/a" || sorted[1].Path != "/c" || sorted[2].Path != "/b" {
+			t.Errorf("Sort by age ascending: got paths %s, %s, %s", sorted[0].Path, sorted[1].Path, sorted[2].Path)
+		}
+	})
+}
+
+// TestSort_ByPath tests sorting files by path.
+func TestSort_ByPath(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/home/user/charlie.txt"},
+		{Path: "/home/user/alice.txt"},
+		{Path: "/home/user/bob.txt"},
+	}
+
+	t.Run("descending", func(t *testing.T) {
+		f := New(WithSortBy(SortPath), WithSortDescending(true))
+		sorted := f.Sort(files)
+
+		if sorted[0].Path != "/home/user/charlie.txt" || sorted[2].Path != "/home/user/alice.txt" {
+			t.Errorf("Sort by path descending = %v", sorted)
+		}
+	})
+
+	t.Run("ascending", func(t *testing.T) {
+		f := New(WithSortBy(SortPath), WithSortDescending(false))
+		sorted := f.Sort(files)
+
+		if sorted[0].Path != "/home/user/alice.txt" || sorted[2].Path != "/home/user/charlie.txt" {
+			t.Errorf("Sort by path ascending = %v", sorted)
+		}
+	})
+}
+
+// TestSort_DoesNotModifyOriginal tests that Sort returns a new slice.
+func TestSort_DoesNotModifyOriginal(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/a", Size: 100},
+		{Path: "/b", Size: 300},
+		{Path: "/c", Size: 200},
+	}
+
+	f := New(WithSortBy(SortSize), WithSortDescending(true))
+	_ = f.Sort(files)
+
+	// Original should be unchanged
+	if files[0].Size != 100 || files[1].Size != 300 || files[2].Size != 200 {
+		t.Error("Sort modified original slice")
+	}
+}
+
+// TestSort_EmptySlice tests sorting an empty slice.
+func TestSort_EmptySlice(t *testing.T) {
+	f := New()
+	sorted := f.Sort([]FileInfo{})
+
+	if len(sorted) != 0 {
+		t.Error("Sort of empty slice should return empty slice")
+	}
+}
+
+// TestApply tests the complete Apply method.
+func TestApply(t *testing.T) {
+	now := time.Now()
+	files := []FileInfo{
+		{Path: "/a.mp4", Ext: ".mp4", Size: 500, ModTime: now, Depth: 1},
+		{Path: "/b.mp4", Ext: ".mp4", Size: 300, ModTime: now, Depth: 1},
+		{Path: "/c.txt", Ext: ".txt", Size: 400, ModTime: now, Depth: 1}, // Wrong extension
+		{Path: "/d.mp4", Ext: ".mp4", Size: 100, ModTime: now, Depth: 1}, // Too small
+		{Path: "/e.mp4", Ext: ".mp4", Size: 600, ModTime: now, Depth: 1},
+		{Path: "/f.mp4", Ext: ".mp4", Size: 700, ModTime: now, Depth: 1},
+	}
+
+	f := New(
+		WithMinSize(200),
+		WithExtensions(".mp4"),
+		WithSortBy(SortSize),
+		WithSortDescending(true),
+		WithLimit(3),
+	)
+
+	result := f.Apply(files)
+
+	// Should filter out c.txt (wrong ext) and d.mp4 (too small)
+	// Then sort by size descending: f(700), e(600), a(500), b(300)
+	// Then limit to 3: f, e, a
+	if len(result) != 3 {
+		t.Fatalf("Apply result length = %d, want 3", len(result))
+	}
+	if result[0].Size != 700 {
+		t.Errorf("result[0].Size = %d, want 700", result[0].Size)
+	}
+	if result[1].Size != 600 {
+		t.Errorf("result[1].Size = %d, want 600", result[1].Size)
+	}
+	if result[2].Size != 500 {
+		t.Errorf("result[2].Size = %d, want 500", result[2].Size)
+	}
+}
+
+// TestApply_NoLimit tests Apply with no limit (Limit=0).
+func TestApply_NoLimit(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/a", Size: 100},
+		{Path: "/b", Size: 200},
+		{Path: "/c", Size: 300},
+	}
+
+	f := New(WithLimit(0)) // Unlimited
+	result := f.Apply(files)
+
+	if len(result) != 3 {
+		t.Errorf("Apply with no limit: got %d results, want 3", len(result))
+	}
+}
+
+// TestApply_LimitLargerThanResults tests Apply when limit exceeds results.
+func TestApply_LimitLargerThanResults(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/a", Size: 100},
+		{Path: "/b", Size: 200},
+	}
+
+	f := New(WithLimit(100))
+	result := f.Apply(files)
+
+	if len(result) != 2 {
+		t.Errorf("Apply: got %d results, want 2", len(result))
+	}
+}
+
+// TestApply_AllFiltered tests Apply when all files are filtered out.
+func TestApply_AllFiltered(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/a.txt", Ext: ".txt", Size: 100},
+		{Path: "/b.txt", Ext: ".txt", Size: 200},
+	}
+
+	f := New(WithExtensions(".mp4")) // Filter out all .txt files
+	result := f.Apply(files)
+
+	if len(result) != 0 {
+		t.Errorf("Apply: got %d results, want 0", len(result))
+	}
+}

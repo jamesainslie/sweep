@@ -825,6 +825,14 @@ func (m ResultModel) renderHeaderWithLive(_ int, liveWatching bool) string {
 	return header
 }
 
+// Notification icons (Unicode symbols, not emoji).
+const (
+	iconAdded    = "◆" // Filled diamond - new/solid
+	iconRemoved  = "✕" // X mark - deleted
+	iconModified = "◇" // Hollow diamond - changed
+	iconRenamed  = "↻" // Circular arrow - renamed
+)
+
 // renderNotifications renders the notification area.
 func (m ResultModel) renderNotifications(width int, notifications []Notification) string {
 	var b strings.Builder
@@ -838,20 +846,36 @@ func (m ResultModel) renderNotifications(width int, notifications []Notification
 
 	for i := len(notifications) - 1; i >= start; i-- {
 		n := notifications[i]
-		var styled string
+
+		// Format timestamp as HH:MM:SS
+		timestamp := notificationTimestampStyle.Render(n.CreatedAt.Format("15:04:05"))
+
+		var icon string
+		var styledMsg string
 		switch n.Type {
 		case NotificationAdded:
-			styled = notificationAddedStyle.Render(n.Message)
+			icon = notificationAddedStyle.Render(iconAdded)
+			styledMsg = notificationAddedStyle.Render(n.Message)
 		case NotificationRemoved:
-			styled = notificationRemovedStyle.Render(n.Message)
+			icon = notificationRemovedStyle.Render(iconRemoved)
+			styledMsg = notificationRemovedStyle.Render(n.Message)
 		case NotificationModified:
-			styled = notificationModifiedStyle.Render(n.Message)
+			icon = notificationModifiedStyle.Render(iconModified)
+			styledMsg = notificationModifiedStyle.Render(n.Message)
+		case NotificationRenamed:
+			icon = notificationRenamedStyle.Render(iconRenamed)
+			styledMsg = notificationRenamedStyle.Render(n.Message)
 		default:
-			styled = n.Message
+			icon = " "
+			styledMsg = n.Message
 		}
 
-		// Right-align notifications
-		padding := width - len(n.Message) - 4
+		// Format: "HH:MM:SS ◆ filename (size)"
+		styled := timestamp + " " + icon + " " + styledMsg
+
+		// Right-align notifications (estimate display width)
+		displayLen := 8 + 1 + 1 + 1 + len(n.Message) + 4 // timestamp + spaces + icon + message + padding
+		padding := width - displayLen
 		if padding < 0 {
 			padding = 0
 		}

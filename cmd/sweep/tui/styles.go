@@ -210,6 +210,15 @@ var (
 	notificationModifiedStyle = lipgloss.NewStyle().
 					Foreground(warningColor).
 					Padding(0, 1)
+
+	// notificationRenamedStyle for file renamed notifications.
+	notificationRenamedStyle = lipgloss.NewStyle().
+					Foreground(primaryColor).
+					Padding(0, 1)
+
+	// notificationTimestampStyle for notification timestamps.
+	notificationTimestampStyle = lipgloss.NewStyle().
+					Foreground(mutedColor)
 )
 
 // Status hint styles for log entry display in footer.

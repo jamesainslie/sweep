@@ -60,14 +60,25 @@ const (
 	NotificationAdded NotificationType = iota
 	NotificationRemoved
 	NotificationModified
+	NotificationRenamed
 )
 
 // Notification represents a temporary notification message.
 type Notification struct {
-	Type    NotificationType
-	Message string
-	Expires time.Time
+	Type      NotificationType
+	Message   string
+	Expires   time.Time
+	CreatedAt time.Time
 }
+
+// pendingRenameEvent tracks a rename event waiting for its matching create.
+type pendingRenameEvent struct {
+	OldPath   string
+	Timestamp time.Time
+}
+
+// renameCorrelationWindow is how long to wait for a create after a rename.
+const renameCorrelationWindow = 100 * time.Millisecond
 
 // Model is the main Bubble Tea model for the sweep TUI.
 type Model struct {
@@ -89,6 +100,9 @@ type Model struct {
 
 	// Notifications for live events
 	notifications []Notification
+
+	// Pending rename tracking (to correlate rename + create events)
+	pendingRename *pendingRenameEvent
 
 	// Status bar hint state
 	statusHint       *logging.LogEntry // Current hint to display (nil if none)
@@ -325,6 +339,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case LiveFileEventMsg:
+		now := time.Now()
+
+		// Check for stale pending rename (timed out without matching create)
+		if m.pendingRename != nil && now.Sub(m.pendingRename.Timestamp) > renameCorrelationWindow {
+			// Emit as a removal since we didn't see a matching create
+			m.notifications = append(m.notifications, Notification{
+				Type:      NotificationRemoved,
+				Message:   truncateFilename(m.pendingRename.OldPath, 40),
+				Expires:   now.Add(3 * time.Second),
+				CreatedAt: m.pendingRename.Timestamp,
+			})
+			m.pendingRename = nil
+		}
+
+		// Handle rename correlation
+		if msg.Event.Type == "renamed" {
+			// Store for correlation with upcoming create
+			m.pendingRename = &pendingRenameEvent{
+				OldPath:   msg.Event.Path,
+				Timestamp: now,
+			}
+			// Remove from results immediately
+			m.resultModel.RemoveFile(msg.Event.Path)
+			// Don't emit notification yet - wait for create
+			return m, m.listenForLiveEvents()
+		}
+
+		if msg.Event.Type == "created" && m.pendingRename != nil &&
+			now.Sub(m.pendingRename.Timestamp) <= renameCorrelationWindow {
+			// This create likely matches the pending rename
+			oldPath := m.pendingRename.OldPath
+			m.pendingRename = nil
+
+			// Add the file with new path
+			fi := types.FileInfo{
+				Path:    msg.Event.Path,
+				Size:    msg.Event.Size,
+				ModTime: time.Unix(msg.Event.ModTime, 0),
+			}
+			if m.options.Filter == nil || m.options.Filter.Match(toFilterFileInfo(fi)) {
+				m.resultModel.AddFile(fi)
+			}
+
+			// Emit rename notification with old → new
+			m.notifications = append(m.notifications, Notification{
+				Type:      NotificationRenamed,
+				Message:   fmt.Sprintf("%s → %s", truncateFilename(oldPath, 18), truncateFilename(msg.Event.Path, 18)),
+				Expires:   now.Add(3 * time.Second),
+				CreatedAt: now,
+			})
+			return m, m.listenForLiveEvents()
+		}
+
+		// Normal event handling
 		notification := handleLiveFileEvent(&m.resultModel, msg.Event, m.options.Filter)
 		if notification != nil {
 			m.notifications = append(m.notifications, *notification)
@@ -889,7 +957,8 @@ func (m Model) listenForLiveEvents() tea.Cmd {
 // If a filter is provided, new/modified files are only added if they pass the filter.
 func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent, f *filter.Filter) *Notification {
 	const notificationDuration = 3 * time.Second
-	expires := time.Now().Add(notificationDuration)
+	now := time.Now()
+	expires := now.Add(notificationDuration)
 
 	switch event.Type {
 	case "created":
@@ -906,9 +975,10 @@ func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent, f *fi
 		// Add the new file to results
 		resultModel.AddFile(fi)
 		return &Notification{
-			Type:    NotificationAdded,
-			Message: fmt.Sprintf("+ %s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
-			Expires: expires,
+			Type:      NotificationAdded,
+			Message:   fmt.Sprintf("%s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
+			Expires:   expires,
+			CreatedAt: now,
 		}
 
 	case "modified":
@@ -923,35 +993,39 @@ func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent, f *fi
 			// File no longer passes filter, remove it
 			resultModel.RemoveFile(event.Path)
 			return &Notification{
-				Type:    NotificationRemoved,
-				Message: "- " + truncateFilename(event.Path, 40) + " (filtered)",
-				Expires: expires,
+				Type:      NotificationRemoved,
+				Message:   truncateFilename(event.Path, 40) + " (filtered)",
+				Expires:   expires,
+				CreatedAt: now,
 			}
 		}
 		// Update the file in results
 		resultModel.UpdateFile(event.Path, event.Size, time.Unix(event.ModTime, 0))
 		return &Notification{
-			Type:    NotificationModified,
-			Message: fmt.Sprintf("~ %s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
-			Expires: expires,
+			Type:      NotificationModified,
+			Message:   fmt.Sprintf("%s (%s)", truncateFilename(event.Path, 30), types.FormatSize(event.Size)),
+			Expires:   expires,
+			CreatedAt: now,
 		}
 
 	case "deleted":
 		// Remove the file from results
 		resultModel.RemoveFile(event.Path)
 		return &Notification{
-			Type:    NotificationRemoved,
-			Message: "- " + truncateFilename(event.Path, 40),
-			Expires: expires,
+			Type:      NotificationRemoved,
+			Message:   truncateFilename(event.Path, 40),
+			Expires:   expires,
+			CreatedAt: now,
 		}
 
 	case "renamed":
 		// Treat rename as delete - the new name will trigger a create event
 		resultModel.RemoveFile(event.Path)
 		return &Notification{
-			Type:    NotificationRemoved,
-			Message: "↻ " + truncateFilename(event.Path, 40),
-			Expires: expires,
+			Type:      NotificationRemoved,
+			Message:   truncateFilename(event.Path, 40),
+			Expires:   expires,
+			CreatedAt: now,
 		}
 	}
 	return nil

@@ -172,8 +172,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event, onChange func(path string, o
 	case event.Op&fsnotify.Remove != 0:
 		w.handleRemove(event.Name)
 	case event.Op&fsnotify.Rename != 0:
-		// Rename is treated as a remove - the new name will trigger a create
-		w.handleRemove(event.Name)
+		// Rename broadcasts as renamed - the new name will trigger a create
+		w.handleRename(event.Name)
 	}
 
 	// Call the callback if provided
@@ -266,6 +266,30 @@ func (w *Watcher) handleWrite(path string) {
 	if w.broadcaster != nil && !info.IsDir() {
 		w.broadcaster.Notify(path, broadcaster.EventModified, info.Size())
 	}
+}
+
+// handleRename handles file/directory rename events (old path).
+func (w *Watcher) handleRename(path string) {
+	// Notify broadcaster with renamed event (size 0 for the old path)
+	if w.broadcaster != nil {
+		w.broadcaster.Notify(path, broadcaster.EventRenamed, 0)
+	}
+
+	// Remove watch if it was a directory (same cleanup as delete)
+	w.mu.Lock()
+	if w.paths[path] {
+		_ = w.watcher.Remove(path)
+		delete(w.paths, path)
+	}
+
+	// Also remove any child watches
+	for childPath := range w.paths {
+		if isSubPath(childPath, path) {
+			_ = w.watcher.Remove(childPath)
+			delete(w.paths, childPath)
+		}
+	}
+	w.mu.Unlock()
 }
 
 // handleRemove handles file/directory deletion events.

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/sweep/cache"
+	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
@@ -39,6 +40,7 @@ type Options struct {
 	DryRun      bool
 	NoDaemon    bool
 	Cache       *cache.Cache
+	Filter      *filter.Filter // Optional filter for pre-filtering views
 }
 
 // ScanProgress tracks the progress of a scan for the TUI.
@@ -250,14 +252,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenForProgress()
 
 	case FileFoundMsg:
-		// Add file to results as it's found
-		m.resultModel.AddFile(msg.File)
+		// Add file to results as it's found (if it passes the filter)
+		if m.filePassesFilter(msg.File) {
+			m.resultModel.AddFile(msg.File)
+		}
 		// Keep listening for more files
 		return m, m.listenForFiles()
 
 	case DaemonFilesMsg:
-		// Daemon returned all files at once - add them all immediately
-		for _, f := range msg.Files {
+		// Daemon returned all files at once - apply filter and add them
+		filteredFiles := m.applyFilterToFiles(msg.Files)
+		for _, f := range filteredFiles {
 			m.resultModel.AddFile(f)
 		}
 		// Update progress
@@ -277,7 +282,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Elapsed:      elapsed,
 		}
 		logging.Get("tui").Info("scan completed via daemon",
-			"files", len(msg.Files),
+			"files", len(filteredFiles),
+			"filtered_from", len(msg.Files),
 			"elapsed", elapsed.Round(time.Millisecond))
 		// Start live file watching
 		if !m.options.NoDaemon {
@@ -319,7 +325,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case LiveFileEventMsg:
-		notification := handleLiveFileEvent(&m.resultModel, msg.Event)
+		notification := handleLiveFileEvent(&m.resultModel, msg.Event, m.options.Filter)
 		if notification != nil {
 			m.notifications = append(m.notifications, *notification)
 		}
@@ -880,18 +886,24 @@ func (m Model) listenForLiveEvents() tea.Cmd {
 
 // handleLiveFileEvent processes a live file event and updates the results.
 // Returns a notification if one should be shown.
-func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent) *Notification {
+// If a filter is provided, new/modified files are only added if they pass the filter.
+func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent, f *filter.Filter) *Notification {
 	const notificationDuration = 3 * time.Second
 	expires := time.Now().Add(notificationDuration)
 
 	switch event.Type {
 	case "created":
-		// Add the new file to results
+		// Build the file info
 		fi := types.FileInfo{
 			Path:    event.Path,
 			Size:    event.Size,
 			ModTime: time.Unix(event.ModTime, 0),
 		}
+		// Check if it passes the filter
+		if f != nil && !f.Match(toFilterFileInfo(fi)) {
+			return nil // File doesn't pass filter, skip it
+		}
+		// Add the new file to results
 		resultModel.AddFile(fi)
 		return &Notification{
 			Type:    NotificationAdded,
@@ -900,6 +912,22 @@ func handleLiveFileEvent(resultModel *ResultModel, event client.FileEvent) *Noti
 		}
 
 	case "modified":
+		// Build the file info for filter check
+		fi := types.FileInfo{
+			Path:    event.Path,
+			Size:    event.Size,
+			ModTime: time.Unix(event.ModTime, 0),
+		}
+		// Check if it passes the filter
+		if f != nil && !f.Match(toFilterFileInfo(fi)) {
+			// File no longer passes filter, remove it
+			resultModel.RemoveFile(event.Path)
+			return &Notification{
+				Type:    NotificationRemoved,
+				Message: "- " + truncateFilename(event.Path, 40) + " (filtered)",
+				Expires: expires,
+			}
+		}
 		// Update the file in results
 		resultModel.UpdateFile(event.Path, event.Size, time.Unix(event.ModTime, 0))
 		return &Notification{
@@ -1050,6 +1078,65 @@ func (m *Model) removeDeletedFiles() {
 
 	// Clear selection
 	m.resultModel.SelectNone()
+}
+
+// filePassesFilter checks if a file passes the configured filter.
+// If no filter is configured, it returns true (backward compatibility).
+func (m *Model) filePassesFilter(f types.FileInfo) bool {
+	if m.options.Filter == nil {
+		return true
+	}
+	return m.options.Filter.Match(toFilterFileInfo(f))
+}
+
+// applyFilterToFiles applies the configured filter to a slice of files.
+// If no filter is configured, it returns the original slice unchanged.
+func (m *Model) applyFilterToFiles(files []types.FileInfo) []types.FileInfo {
+	if m.options.Filter == nil {
+		return files
+	}
+
+	// Convert to filter.FileInfo slice
+	filterInfos := make([]filter.FileInfo, len(files))
+	for i, f := range files {
+		filterInfos[i] = toFilterFileInfo(f)
+	}
+
+	// Apply filter
+	filtered := m.options.Filter.Apply(filterInfos)
+
+	// Convert back to types.FileInfo slice
+	result := make([]types.FileInfo, len(filtered))
+	for i, fi := range filtered {
+		result[i] = fromFilterFileInfo(fi)
+	}
+
+	return result
+}
+
+// toFilterFileInfo converts types.FileInfo to filter.FileInfo.
+func toFilterFileInfo(f types.FileInfo) filter.FileInfo {
+	return filter.FileInfo{
+		Path:    f.Path,
+		Name:    filepath.Base(f.Path),
+		Dir:     filepath.Dir(f.Path),
+		Ext:     filepath.Ext(f.Path),
+		Size:    f.Size,
+		ModTime: f.ModTime,
+		Mode:    f.Mode,
+		Owner:   f.Owner,
+	}
+}
+
+// fromFilterFileInfo converts filter.FileInfo back to types.FileInfo.
+func fromFilterFileInfo(fi filter.FileInfo) types.FileInfo {
+	return types.FileInfo{
+		Path:    fi.Path,
+		Size:    fi.Size,
+		ModTime: fi.ModTime,
+		Mode:    fi.Mode,
+		Owner:   fi.Owner,
+	}
 }
 
 // Run starts the TUI application.

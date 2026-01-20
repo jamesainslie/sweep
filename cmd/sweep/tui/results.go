@@ -305,9 +305,13 @@ var (
 	rowNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC"))
 
-	// Checkbox styles - explicitly pad to 3 chars with centered indicator
-	checkboxChecked   = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("●") + " "
-	checkboxUnchecked = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○") + " "
+	// Checkbox characters (plain, for use in formatting)
+	checkSelectedChar   = "✓"
+	checkUnselectedChar = "·"
+
+	// Checkbox styles for non-highlighted rows
+	checkboxCheckedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
+	checkboxUncheckedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
 
 	// Size style
 	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)
@@ -342,25 +346,29 @@ func (m ResultModel) renderFileList(width int) string {
 			filename = filename[:filenameWidth-3] + "..."
 		}
 
+		// Build checkbox string (3 chars: space + indicator + space)
+		var checkChar string
+		if isSelected {
+			checkChar = checkSelectedChar
+		} else {
+			checkChar = checkUnselectedChar
+		}
+
 		// For highlighted row, use plain text so background spans full width
 		// For normal rows, use styled checkbox and size
 		if isCursor {
-			checkbox := " ✓ "
-			if !isSelected {
-				checkbox = " ○ "
-			}
 			size := padLeft(types.FormatSize(file.Size), 10)
-			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
+			row := fmt.Sprintf(" %s %s  %s", checkChar, size, filename)
 			b.WriteString(rowHighlightStyle.Width(width).Render(row))
 		} else {
-			var checkbox string
+			var styledCheck string
 			if isSelected {
-				checkbox = checkboxChecked
+				styledCheck = checkboxCheckedStyle.Render(checkChar)
 			} else {
-				checkbox = checkboxUnchecked
+				styledCheck = checkboxUncheckedStyle.Render(checkChar)
 			}
 			size := sizeStyle.Render(types.FormatSize(file.Size))
-			row := fmt.Sprintf("%s%s  %s", checkbox, size, filename)
+			row := fmt.Sprintf(" %s %s  %s", styledCheck, size, filename)
 			b.WriteString(rowNormalStyle.Width(width).Render(row))
 		}
 		b.WriteString("\n")

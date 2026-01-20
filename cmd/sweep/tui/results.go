@@ -305,10 +305,9 @@ var (
 	rowNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#CCCCCC"))
 
-	// Checkbox styles - use a 3-char wide column with centered checkbox
-	checkboxStyle = lipgloss.NewStyle().Width(3).Align(lipgloss.Center)
-	checkboxChecked   = checkboxStyle.Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("✓")
-	checkboxUnchecked = checkboxStyle.Foreground(lipgloss.Color("#666666")).Render("○")
+	// Checkbox styles - explicitly pad to 3 chars with centered indicator
+	checkboxChecked   = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true).Render("●") + " "
+	checkboxUnchecked = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render("○") + " "
 
 	// Size style
 	sizeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00AAFF")).Width(10).Align(lipgloss.Right)

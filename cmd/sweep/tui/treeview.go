@@ -112,11 +112,10 @@ func (tv *TreeView) Toggle() {
 	}
 }
 
-// ToggleSelect toggles selection of the current file.
-// Has no effect on directories.
+// ToggleSelect toggles selection of the current node (file or directory).
 func (tv *TreeView) ToggleSelect() {
 	node := tv.Selected()
-	if node == nil || node.IsDir {
+	if node == nil {
 		return
 	}
 
@@ -135,11 +134,11 @@ func (tv *TreeView) Selected() *tree.Node {
 	return tv.flat[tv.cursor]
 }
 
-// GetSelectedFiles returns all selected file nodes.
+// GetSelectedFiles returns all selected nodes (files and directories).
 func (tv *TreeView) GetSelectedFiles() []*tree.Node {
 	var result []*tree.Node
 	for _, node := range tv.flat {
-		if !node.IsDir && tv.selected[node.Path] {
+		if tv.selected[node.Path] {
 			result = append(result, node)
 		}
 	}
@@ -224,23 +223,24 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 	// Indentation
 	content.WriteString(indent)
 
-	// Icon for dirs or selection indicator for files
+	// Selection indicator + icon
+	if isSelected {
+		content.WriteString(iconSelected)
+	} else {
+		content.WriteString(iconUnselected)
+	}
+
+	// Expand/collapse icon for directories
 	if node.IsDir {
 		if node.Expanded {
 			content.WriteString(iconExpanded)
 		} else {
 			content.WriteString(iconCollapsed)
 		}
-		content.WriteString(" ")
 	} else {
-		// File selection indicator
-		if isSelected {
-			content.WriteString(iconSelected)
-		} else {
-			content.WriteString(iconUnselected)
-		}
 		content.WriteString(" ")
 	}
+	content.WriteString(" ")
 
 	// Name
 	content.WriteString(node.Name)
@@ -366,12 +366,17 @@ func (tv *TreeView) SelectedCount() int {
 	return len(tv.selected)
 }
 
-// SelectedSize returns the total size of selected files.
+// SelectedSize returns the total size of selected nodes.
+// For directories, uses LargeFileSize (sum of large files underneath).
 func (tv *TreeView) SelectedSize() int64 {
 	var total int64
 	for _, node := range tv.flat {
-		if !node.IsDir && tv.selected[node.Path] {
-			total += node.Size
+		if tv.selected[node.Path] {
+			if node.IsDir {
+				total += node.LargeFileSize
+			} else {
+				total += node.Size
+			}
 		}
 	}
 	return total

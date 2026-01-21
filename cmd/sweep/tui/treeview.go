@@ -13,11 +13,16 @@ import (
 )
 
 // Tree view icons using Unicode symbols.
+// Fill indicates selection, direction indicates expand state.
 const (
-	iconExpanded   = "\u25BC" // Black down-pointing triangle
-	iconCollapsed  = "\u25B6" // Black right-pointing triangle
-	iconSelected   = "\u25CF" // Black circle (filled)
-	iconUnselected = "\u25CB" // White circle (outline)
+	// Directories: filled = selected, outline = unselected
+	iconDirExpandedSelected   = "\u25BC" // ▼ Black down-pointing triangle
+	iconDirCollapsedSelected  = "\u25B6" // ▶ Black right-pointing triangle
+	iconDirExpandedUnselected = "\u25BD" // ▽ White down-pointing triangle
+	iconDirCollapsedUnselected = "\u25B7" // ▷ White right-pointing triangle
+	// Files: filled = selected, outline = unselected
+	iconFileSelected   = "\u25CF" // ● Black circle (filled)
+	iconFileUnselected = "\u25CB" // ○ White circle (outline)
 )
 
 // TreeView displays a hierarchical tree of directories and files
@@ -223,23 +228,30 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 	// Indentation
 	content.WriteString(indent)
 
-	// Selection indicator + icon
-	if isSelected {
-		content.WriteString(iconSelected)
-	} else {
-		content.WriteString(iconUnselected)
-	}
-
-	// Expand/collapse icon for directories
+	// Single icon combining selection (fill) and expand state (direction)
+	var icon string
 	if node.IsDir {
-		if node.Expanded {
-			content.WriteString(iconExpanded)
+		if isSelected {
+			if node.Expanded {
+				icon = iconDirExpandedSelected // ▼
+			} else {
+				icon = iconDirCollapsedSelected // ▶
+			}
 		} else {
-			content.WriteString(iconCollapsed)
+			if node.Expanded {
+				icon = iconDirExpandedUnselected // ▽
+			} else {
+				icon = iconDirCollapsedUnselected // ▷
+			}
 		}
 	} else {
-		content.WriteString(" ")
+		if isSelected {
+			icon = iconFileSelected // ●
+		} else {
+			icon = iconFileUnselected // ○
+		}
 	}
+	content.WriteString(icon)
 	content.WriteString(" ")
 
 	// Name
@@ -301,32 +313,21 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 		return treeRowHighlightStyle.Width(width).Render(row)
 	}
 
-	// Color the selection indicator for files
-	if !node.IsDir {
-		// Re-render with colored selection indicator and styled bar
-		var styled strings.Builder
-		styled.WriteString(indent)
-		if isSelected {
-			styled.WriteString(lipgloss.NewStyle().Foreground(treeSelectedColor).Render(iconSelected))
-		} else {
-			styled.WriteString(lipgloss.NewStyle().Foreground(treeUnselectedColor).Render(iconUnselected))
-		}
-		styled.WriteString(" ")
-		styled.WriteString(node.Name)
-		styled.WriteString(strings.Repeat(" ", padding))
-		styled.WriteString(treeBarStyle.Render(bar))
-		styled.WriteString(" ")
-		styled.WriteString(lipgloss.NewStyle().Foreground(treeSizeColor).Render(sizeStr))
-		return treeRowNormalStyle.Width(width).Render(styled.String())
-	}
-
-	// Style bar for directories
+	// Re-render with colored icon and styled bar
 	var styled strings.Builder
-	styled.WriteString(content.String())
+	styled.WriteString(indent)
+	if isSelected {
+		styled.WriteString(lipgloss.NewStyle().Foreground(treeSelectedColor).Render(icon))
+	} else {
+		styled.WriteString(lipgloss.NewStyle().Foreground(treeUnselectedColor).Render(icon))
+	}
+	styled.WriteString(" ")
+	styled.WriteString(node.Name)
 	styled.WriteString(strings.Repeat(" ", padding))
 	styled.WriteString(treeBarStyle.Render(bar))
 	styled.WriteString(" ")
 	styled.WriteString(lipgloss.NewStyle().Foreground(treeSizeColor).Render(sizeStr))
+
 	return treeRowNormalStyle.Width(width).Render(styled.String())
 }
 

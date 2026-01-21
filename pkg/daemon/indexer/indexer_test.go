@@ -101,3 +101,137 @@ func TestIndexerProgress(t *testing.T) {
 		t.Error("Expected progress callbacks")
 	}
 }
+
+func TestAdditiveIndexing(t *testing.T) {
+	// Create temp directories: tmpDir/Downloads, tmpDir/Desktop
+	tmpDir := t.TempDir()
+	downloads := filepath.Join(tmpDir, "Downloads")
+	desktop := filepath.Join(tmpDir, "Desktop")
+
+	if err := os.MkdirAll(downloads, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(desktop, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create some files in each
+	if err := os.WriteFile(filepath.Join(downloads, "file1.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(desktop, "file2.txt"), []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	idx := indexer.New(s)
+	ctx := context.Background()
+
+	// Index Downloads first
+	result1, err := idx.Index(ctx, downloads, nil)
+	if err != nil {
+		t.Fatalf("Index Downloads failed: %v", err)
+	}
+	if len(result1.SubsumedPaths) > 0 {
+		t.Errorf("Expected no subsumed paths for first index, got %v", result1.SubsumedPaths)
+	}
+
+	// Index Desktop second
+	result2, err := idx.Index(ctx, desktop, nil)
+	if err != nil {
+		t.Fatalf("Index Desktop failed: %v", err)
+	}
+	if len(result2.SubsumedPaths) > 0 {
+		t.Errorf("Expected no subsumed paths for second index, got %v", result2.SubsumedPaths)
+	}
+
+	// Verify both are in indexed paths
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("Expected 2 indexed paths, got %d: %v", len(paths), paths)
+	}
+
+	// Index tmpDir (parent)
+	result3, err := idx.Index(ctx, tmpDir, nil)
+	if err != nil {
+		t.Fatalf("Index tmpDir failed: %v", err)
+	}
+
+	// Verify children were subsumed
+	if len(result3.SubsumedPaths) != 2 {
+		t.Errorf("Expected 2 subsumed paths, got %d: %v", len(result3.SubsumedPaths), result3.SubsumedPaths)
+	}
+
+	// Verify only tmpDir remains
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("Expected 1 indexed path after subsumption, got %d: %v", len(paths), paths)
+	}
+	if len(paths) == 1 && paths[0] != tmpDir {
+		t.Errorf("Expected indexed path to be %q, got %q", tmpDir, paths[0])
+	}
+}
+
+func TestIndexingCoveredPath(t *testing.T) {
+	// Create temp directories
+	tmpDir := t.TempDir()
+	childDir := filepath.Join(tmpDir, "child")
+
+	if err := os.MkdirAll(childDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create some files
+	if err := os.WriteFile(filepath.Join(childDir, "file.txt"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	idx := indexer.New(s)
+	ctx := context.Background()
+
+	// Index parent path first
+	_, err = idx.Index(ctx, tmpDir, nil)
+	if err != nil {
+		t.Fatalf("Index parent failed: %v", err)
+	}
+
+	// Try to index child path
+	result, err := idx.Index(ctx, childDir, nil)
+	if err != nil {
+		t.Fatalf("Index child failed: %v", err)
+	}
+
+	// Verify it returns early with Cached: true and CoveredBy set
+	if !result.Cached {
+		t.Error("Expected Cached to be true for covered path")
+	}
+	if result.CoveredBy != tmpDir {
+		t.Errorf("Expected CoveredBy to be %q, got %q", tmpDir, result.CoveredBy)
+	}
+
+	// Verify indexed paths are unchanged (still just the parent)
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("Expected 1 indexed path, got %d: %v", len(paths), paths)
+	}
+}

@@ -24,11 +24,14 @@ type Progress struct {
 
 // Result contains the final indexing results.
 type Result struct {
-	Path         string
-	DirsIndexed  int64
-	FilesIndexed int64
-	TotalSize    int64
-	Duration     time.Duration
+	Path          string
+	DirsIndexed   int64
+	FilesIndexed  int64
+	TotalSize     int64
+	Duration      time.Duration
+	Cached        bool     // True if path was already covered by an indexed path
+	CoveredBy     string   // Parent path that covers this one (if Cached is true)
+	SubsumedPaths []string // Child paths that were subsumed by this indexing operation
 }
 
 // ProgressFunc is called with progress updates.
@@ -73,6 +76,16 @@ func (idx *Indexer) Index(ctx context.Context, root string, onProgress ProgressF
 		return nil, err
 	}
 
+	// Check if this path is already covered by an indexed path
+	if covered, coveringPath := idx.store.IsPathCovered(absRoot); covered {
+		return &Result{
+			Path:      absRoot,
+			Duration:  time.Since(startTime),
+			Cached:    true,
+			CoveredBy: coveringPath,
+		}, nil
+	}
+
 	state := &indexState{}
 	state.currentPath.Store("")
 
@@ -108,12 +121,19 @@ func (idx *Indexer) Index(ctx context.Context, root string, onProgress ProgressF
 		_ = idx.store.SetSchema(&store.Schema{Version: store.CurrentSchemaVersion})
 	}
 
+	// Add this path to the indexed paths list, subsuming any child paths
+	subsumedPaths, err := idx.store.AddIndexedPathWithSubsumption(absRoot)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Result{
-		Path:         absRoot,
-		DirsIndexed:  dirs,
-		FilesIndexed: files,
-		TotalSize:    state.totalSize.Load(),
-		Duration:     time.Since(startTime),
+		Path:          absRoot,
+		DirsIndexed:   dirs,
+		FilesIndexed:  files,
+		TotalSize:     state.totalSize.Load(),
+		Duration:      time.Since(startTime),
+		SubsumedPaths: subsumedPaths,
 	}, nil
 }
 

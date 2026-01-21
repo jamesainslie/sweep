@@ -746,8 +746,8 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 
 	var b strings.Builder
 
-	// Title
-	b.WriteString(titleStyle.Render("  Tree View"))
+	// Header - same style as flat list view
+	b.WriteString(m.renderTreeHeader(contentWidth))
 	b.WriteString("\n")
 	b.WriteString(renderDivider(contentWidth))
 	b.WriteString("\n")
@@ -781,6 +781,32 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	b.WriteString(helpText)
 
 	return outerBoxStyle.Width(m.width - 2).Render(b.String())
+}
+
+// renderTreeHeader renders the header for tree view mode (same style as flat list).
+func (m Model) renderTreeHeader(_ int) string {
+	// Icon and app name
+	icon := "🧹"
+	appName := titleStyle.Bold(true).Render("SWEEP")
+
+	// Stats from tree
+	var fileCount int
+	var totalSize int64
+	if m.treeView != nil && m.treeView.root != nil {
+		fileCount = m.treeView.root.LargeFileCount
+		totalSize = m.treeView.root.LargeFileSize
+	}
+	stats := mutedTextStyle.Render(fmt.Sprintf("  %d files  •  %s", fileCount, types.FormatSize(totalSize)))
+
+	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
+
+	// Show live indicator if watching
+	if m.treeWatching {
+		liveIndicator := successTextStyle.Render("  ● LIVE")
+		header = header + liveIndicator
+	}
+
+	return header
 }
 
 // renderTreeHelpBar renders the help bar for tree view mode.

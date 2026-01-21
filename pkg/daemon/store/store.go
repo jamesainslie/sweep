@@ -13,9 +13,10 @@ import (
 
 // Key prefixes for different data types
 const (
-	prefixEntry     = "e:" // Regular file/dir entries
-	prefixLargeFile = "l:" // Large files index (for fast queries)
-	prefixMeta      = "m:" // Metadata (counts, etc.)
+	prefixEntry       = "e:" // Regular file/dir entries
+	prefixLargeFile   = "l:" // Large files index (for fast queries)
+	prefixMeta        = "m:" // Metadata (counts, etc.)
+	prefixIndexedPath = "p:" // Indexed paths (for additive indexing)
 )
 
 // Entry represents a file or directory in the index.
@@ -408,4 +409,44 @@ func IsPathUnderRoot(path, root string) bool {
 	cleanRoot := filepath.Clean(root)
 	cleanPath := filepath.Clean(path)
 	return strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) || cleanPath == cleanRoot
+}
+
+// AddIndexedPath records a path as having been indexed.
+// This supports additive indexing where new paths can be added to the index.
+func (s *Store) AddIndexedPath(path string) error {
+	key := []byte(prefixIndexedPath + path)
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, []byte{1}) // Value is just a marker
+	})
+}
+
+// RemoveIndexedPath removes a path from the indexed paths list.
+func (s *Store) RemoveIndexedPath(path string) error {
+	key := []byte(prefixIndexedPath + path)
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete(key)
+	})
+}
+
+// GetIndexedPaths returns all paths that have been indexed.
+func (s *Store) GetIndexedPaths() ([]string, error) {
+	var paths []string
+
+	err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		prefix := []byte(prefixIndexedPath)
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			key := it.Item().Key()
+			// Extract path from key (remove prefix)
+			path := string(key[len(prefixIndexedPath):])
+			paths = append(paths, path)
+		}
+		return nil
+	})
+
+	return paths, err
 }

@@ -359,3 +359,99 @@ func TestRebuildLargeFilesIndex(t *testing.T) {
 		t.Errorf("Expected 2 results, got %d", len(results))
 	}
 }
+
+func TestIndexedPaths(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Initially no indexed paths
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("Expected 0 indexed paths initially, got %d", len(paths))
+	}
+
+	// Add some indexed paths
+	testPaths := []string{
+		"/Users/test/projects",
+		"/Users/test/documents",
+		"/var/data",
+	}
+
+	for _, p := range testPaths {
+		if err := s.AddIndexedPath(p); err != nil {
+			t.Fatalf("AddIndexedPath(%q) failed: %v", p, err)
+		}
+	}
+
+	// Verify all paths are tracked
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	if len(paths) != len(testPaths) {
+		t.Errorf("Expected %d indexed paths, got %d", len(testPaths), len(paths))
+	}
+
+	// Verify each path is present
+	pathSet := make(map[string]bool)
+	for _, p := range paths {
+		pathSet[p] = true
+	}
+	for _, expected := range testPaths {
+		if !pathSet[expected] {
+			t.Errorf("Expected path %q to be in indexed paths", expected)
+		}
+	}
+
+	// Remove one path
+	if err := s.RemoveIndexedPath("/Users/test/documents"); err != nil {
+		t.Fatalf("RemoveIndexedPath failed: %v", err)
+	}
+
+	// Verify removal
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths after removal failed: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Errorf("Expected 2 indexed paths after removal, got %d", len(paths))
+	}
+
+	// Verify the removed path is gone
+	pathSet = make(map[string]bool)
+	for _, p := range paths {
+		pathSet[p] = true
+	}
+	if pathSet["/Users/test/documents"] {
+		t.Error("Expected /Users/test/documents to be removed")
+	}
+	if !pathSet["/Users/test/projects"] {
+		t.Error("Expected /Users/test/projects to still exist")
+	}
+	if !pathSet["/var/data"] {
+		t.Error("Expected /var/data to still exist")
+	}
+
+	// Test idempotent add (adding same path twice should not duplicate)
+	if err := s.AddIndexedPath("/Users/test/projects"); err != nil {
+		t.Fatalf("AddIndexedPath (duplicate) failed: %v", err)
+	}
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths after duplicate add failed: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Errorf("Expected 2 indexed paths after duplicate add, got %d", len(paths))
+	}
+
+	// Test removing non-existent path (should not error)
+	if err := s.RemoveIndexedPath("/nonexistent/path"); err != nil {
+		t.Fatalf("RemoveIndexedPath (non-existent) failed: %v", err)
+	}
+}

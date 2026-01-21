@@ -211,3 +211,166 @@ func TestService_WatchLargeFiles_FiltersByPath(t *testing.T) {
 	require.Len(t, stream.events, 1)
 	assert.Equal(t, "/tmp/test/subdir/file.zip", stream.events[0].GetPath())
 }
+
+// mockTreeWatchStream implements grpc.ServerStreamingServer[sweepv1.TreeEvent] for testing.
+type mockTreeWatchStream struct {
+	grpc.ServerStream
+	events []*sweepv1.TreeEvent
+	ctx    context.Context
+}
+
+func (m *mockTreeWatchStream) Send(event *sweepv1.TreeEvent) error {
+	m.events = append(m.events, event)
+	return nil
+}
+
+func (m *mockTreeWatchStream) Context() context.Context {
+	return m.ctx
+}
+
+func TestService_WatchTree(t *testing.T) {
+	// Create service with broadcaster
+	b := broadcaster.New()
+	defer b.Close()
+
+	svc := &Service{
+		broadcaster: b,
+		indexStates: make(map[string]*indexState),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	stream := &mockTreeWatchStream{ctx: ctx}
+	req := &sweepv1.WatchTreeRequest{
+		Root:    "/tmp/test",
+		MinSize: 1024,
+	}
+
+	// Start watching in goroutine
+	done := make(chan error)
+	go func() {
+		done <- svc.WatchTree(req, stream)
+	}()
+
+	// Give it time to subscribe
+	time.Sleep(10 * time.Millisecond)
+
+	// Send an event through the broadcaster
+	b.Notify("/tmp/test/subdir/big.zip", broadcaster.EventCreated, 2048)
+
+	// Wait for stream to end (context timeout)
+	err := <-done
+	require.NoError(t, err)
+
+	// Verify event was sent with correct parent path
+	require.Len(t, stream.events, 1)
+	assert.Equal(t, sweepv1.TreeEvent_CREATED, stream.events[0].GetType())
+	assert.Equal(t, "/tmp/test/subdir/big.zip", stream.events[0].GetPath())
+	assert.Equal(t, int64(2048), stream.events[0].GetSize())
+	assert.Equal(t, "/tmp/test/subdir", stream.events[0].GetParentPath())
+}
+
+func TestService_WatchTree_NoBroadcaster(t *testing.T) {
+	// Create service without broadcaster
+	svc := &Service{
+		broadcaster: nil,
+		indexStates: make(map[string]*indexState),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	stream := &mockTreeWatchStream{ctx: ctx}
+	req := &sweepv1.WatchTreeRequest{
+		Root:    "/tmp/test",
+		MinSize: 1024,
+	}
+
+	err := svc.WatchTree(req, stream)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file watching not available")
+}
+
+func TestService_WatchTree_MultipleEvents(t *testing.T) {
+	b := broadcaster.New()
+	defer b.Close()
+
+	svc := &Service{
+		broadcaster: b,
+		indexStates: make(map[string]*indexState),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	stream := &mockTreeWatchStream{ctx: ctx}
+	req := &sweepv1.WatchTreeRequest{
+		Root:    "/tmp/test",
+		MinSize: 1024,
+	}
+
+	done := make(chan error)
+	go func() {
+		done <- svc.WatchTree(req, stream)
+	}()
+
+	// Give it time to subscribe
+	time.Sleep(10 * time.Millisecond)
+
+	// Send multiple events
+	b.Notify("/tmp/test/file1.zip", broadcaster.EventCreated, 2048)
+	b.Notify("/tmp/test/dir/file2.zip", broadcaster.EventModified, 4096)
+	b.Notify("/tmp/test/file3.zip", broadcaster.EventDeleted, 0)
+
+	// Wait for stream to end
+	err := <-done
+	require.NoError(t, err)
+
+	// Should receive all 3 events (deleted events bypass size check)
+	require.Len(t, stream.events, 3)
+	assert.Equal(t, sweepv1.TreeEvent_CREATED, stream.events[0].GetType())
+	assert.Equal(t, "/tmp/test", stream.events[0].GetParentPath())
+	assert.Equal(t, sweepv1.TreeEvent_MODIFIED, stream.events[1].GetType())
+	assert.Equal(t, "/tmp/test/dir", stream.events[1].GetParentPath())
+	assert.Equal(t, sweepv1.TreeEvent_DELETED, stream.events[2].GetType())
+	assert.Equal(t, "/tmp/test", stream.events[2].GetParentPath())
+}
+
+func TestService_WatchTree_FiltersBySize(t *testing.T) {
+	b := broadcaster.New()
+	defer b.Close()
+
+	svc := &Service{
+		broadcaster: b,
+		indexStates: make(map[string]*indexState),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	stream := &mockTreeWatchStream{ctx: ctx}
+	req := &sweepv1.WatchTreeRequest{
+		Root:    "/tmp/test",
+		MinSize: 5000, // Only files >= 5000 bytes
+	}
+
+	done := make(chan error)
+	go func() {
+		done <- svc.WatchTree(req, stream)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Send events with different sizes
+	b.Notify("/tmp/test/small.txt", broadcaster.EventCreated, 100)   // Should be filtered out
+	b.Notify("/tmp/test/large.zip", broadcaster.EventCreated, 10000) // Should pass
+	b.Notify("/tmp/test/medium.doc", broadcaster.EventCreated, 4000) // Should be filtered out
+
+	err := <-done
+	require.NoError(t, err)
+
+	// Only large.zip should have been received
+	require.Len(t, stream.events, 1)
+	assert.Equal(t, "/tmp/test/large.zip", stream.events[0].GetPath())
+}

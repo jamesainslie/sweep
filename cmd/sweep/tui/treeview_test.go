@@ -10,10 +10,12 @@ import (
 // Helper to create a test tree structure.
 func createTestTree() *tree.Node {
 	root := &tree.Node{
-		Path:     "/test",
-		Name:     "test",
-		IsDir:    true,
-		Expanded: true,
+		Path:           "/test",
+		Name:           "test",
+		IsDir:          true,
+		Expanded:       true,
+		LargeFileSize:  1024 * 1024 * 250, // 250 MiB (200 + 50)
+		LargeFileCount: 3,                 // 3 files total
 	}
 
 	dir1 := &tree.Node{
@@ -561,5 +563,481 @@ func TestTreeViewRefresh(t *testing.T) {
 
 	if len(tv.flat) == initialLen {
 		t.Error("expected flat list to change after refresh")
+	}
+}
+
+// Size bar tests.
+func TestTreeViewSizeBarRendering(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	view := tv.View(100, 24)
+
+	// View should contain size bar characters (filled and empty)
+	if !strings.Contains(view, "█") && !strings.Contains(view, "░") {
+		t.Error("expected size bar characters in view")
+	}
+}
+
+func TestTreeViewSizeBarProportions(t *testing.T) {
+	// Create a tree with known sizes
+	root := &tree.Node{
+		Path:          "/test",
+		Name:          "test",
+		IsDir:         true,
+		Expanded:      true,
+		LargeFileSize: 1000,
+	}
+
+	// Add a file with half the size
+	file := &tree.Node{
+		Path: "/test/file.txt",
+		Name: "file.txt",
+		Size: 500, // Half of root's LargeFileSize
+	}
+	root.AddChild(file)
+
+	tv := NewTreeView(root)
+	view := tv.View(100, 24)
+
+	// View should render without errors
+	if view == "" {
+		t.Error("expected non-empty view")
+	}
+
+	// The file should have some filled bar characters (roughly half)
+	// We can't test exact proportions easily, but we can verify the view exists
+	lines := strings.Split(view, "\n")
+	foundFileWithBar := false
+	for _, line := range lines {
+		if strings.Contains(line, "file.txt") && strings.Contains(line, "█") {
+			foundFileWithBar = true
+			break
+		}
+	}
+	if !foundFileWithBar {
+		t.Error("expected file to have a filled size bar")
+	}
+}
+
+// Staging area tests.
+func TestTreeViewRenderStagingAreaEmpty(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// No selection, should return empty string
+	staging := tv.RenderStagingArea(80)
+	if staging != "" {
+		t.Errorf("expected empty staging area with no selection, got %q", staging)
+	}
+}
+
+func TestTreeViewRenderStagingAreaWithSelection(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Select a file
+	tv.MoveDown() // dir1
+	tv.MoveDown() // dir2
+	tv.MoveDown() // file3
+	tv.ToggleSelect()
+
+	staging := tv.RenderStagingArea(80)
+	if staging == "" {
+		t.Error("expected non-empty staging area with selection")
+	}
+
+	// Should contain selection count
+	if !strings.Contains(staging, "1 selected") {
+		t.Error("expected staging area to show selection count")
+	}
+
+	// Should contain key hints
+	if !strings.Contains(staging, "d") || !strings.Contains(staging, "c") {
+		t.Error("expected staging area to show key hints")
+	}
+}
+
+func TestTreeViewRenderStagingAreaMultipleSelections(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Expand dir1 to access its files
+	tv.MoveDown() // dir1
+	tv.Toggle()   // expand dir1
+
+	// Select multiple files
+	tv.MoveDown() // file1
+	tv.ToggleSelect()
+	tv.MoveDown() // file2
+	tv.ToggleSelect()
+
+	staging := tv.RenderStagingArea(80)
+	if !strings.Contains(staging, "2 selected") {
+		t.Errorf("expected staging area to show 2 selected, got %q", staging)
+	}
+}
+
+// Helper method tests.
+func TestTreeViewSelectedCount(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	if tv.SelectedCount() != 0 {
+		t.Error("expected 0 selected initially")
+	}
+
+	// Select files
+	tv.MoveDown()
+	tv.MoveDown()
+	tv.MoveDown() // file3
+	tv.ToggleSelect()
+
+	if tv.SelectedCount() != 1 {
+		t.Errorf("expected 1 selected, got %d", tv.SelectedCount())
+	}
+}
+
+func TestTreeViewSelectedSize(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	if tv.SelectedSize() != 0 {
+		t.Error("expected 0 selected size initially")
+	}
+
+	// Select file3 (50 MiB)
+	tv.MoveDown()
+	tv.MoveDown()
+	tv.MoveDown() // file3
+	tv.ToggleSelect()
+
+	expectedSize := int64(1024 * 1024 * 50) // 50 MiB
+	if tv.SelectedSize() != expectedSize {
+		t.Errorf("expected selected size %d, got %d", expectedSize, tv.SelectedSize())
+	}
+}
+
+func TestTreeViewHasSelection(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	if tv.HasSelection() {
+		t.Error("expected no selection initially")
+	}
+
+	tv.MoveDown()
+	tv.MoveDown()
+	tv.MoveDown() // file3
+	tv.ToggleSelect()
+
+	if !tv.HasSelection() {
+		t.Error("expected selection after toggle")
+	}
+
+	tv.ClearSelection()
+	if tv.HasSelection() {
+		t.Error("expected no selection after clear")
+	}
+}
+
+// Tree mutation tests (live updates).
+
+func TestTreeViewAddFile(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialCount := len(tv.flat)
+
+	// Add a new file to dir2
+	tv.AddFile("/test/dir2/newfile.txt", 1024*1024*30, 1234567890)
+
+	// Should have one more visible node (since dir2 is expanded)
+	if len(tv.flat) != initialCount+1 {
+		t.Errorf("expected %d visible nodes after add, got %d", initialCount+1, len(tv.flat))
+	}
+
+	// Find the new file
+	found := false
+	for _, node := range tv.flat {
+		if node.Path == "/test/dir2/newfile.txt" {
+			found = true
+			if node.Size != 1024*1024*30 {
+				t.Errorf("expected size %d, got %d", 1024*1024*30, node.Size)
+			}
+			if node.ModTime != 1234567890 {
+				t.Errorf("expected modTime %d, got %d", 1234567890, node.ModTime)
+			}
+			if node.FileType != "Text" {
+				t.Errorf("expected file type 'Text', got %q", node.FileType)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find new file in flat list")
+	}
+
+	// Verify aggregates were updated
+	for _, child := range tv.root.Children {
+		if child.Name == "dir2" {
+			// dir2 had 1 file of 50MiB, now has 2 files totaling 80MiB
+			expectedSize := int64(1024 * 1024 * 80)
+			if child.LargeFileSize != expectedSize {
+				t.Errorf("expected dir2 LargeFileSize %d, got %d", expectedSize, child.LargeFileSize)
+			}
+			if child.LargeFileCount != 2 {
+				t.Errorf("expected dir2 LargeFileCount 2, got %d", child.LargeFileCount)
+			}
+			break
+		}
+	}
+}
+
+func TestTreeViewAddFileNewDirectory(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialCount := len(tv.flat)
+
+	// Add a file in a new directory
+	tv.AddFile("/test/newdir/nested/file.txt", 1024*1024*10, 1234567890)
+
+	// The new directories should be created but collapsed by default
+	// So only the immediate child of root (newdir) should appear, collapsed
+	// flat should have: root, dir1, dir2, file3, newdir = 5
+	if len(tv.flat) != initialCount+1 {
+		t.Errorf("expected %d visible nodes (new dir collapsed), got %d", initialCount+1, len(tv.flat))
+	}
+
+	// Find the new directory
+	found := false
+	for _, node := range tv.flat {
+		if node.Path == "/test/newdir" {
+			found = true
+			if !node.IsDir {
+				t.Error("expected newdir to be a directory")
+			}
+			// Aggregates should reflect the file
+			if node.LargeFileSize != 1024*1024*10 {
+				t.Errorf("expected newdir LargeFileSize %d, got %d", 1024*1024*10, node.LargeFileSize)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find new directory in flat list")
+	}
+}
+
+func TestTreeViewAddFileToCollapsedDir(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialCount := len(tv.flat)
+
+	// dir1 is collapsed, add a file to it
+	tv.AddFile("/test/dir1/newfile.txt", 1024*1024*25, 1234567890)
+
+	// Flat list should not change since dir1 is collapsed
+	if len(tv.flat) != initialCount {
+		t.Errorf("expected %d visible nodes (dir collapsed), got %d", initialCount, len(tv.flat))
+	}
+
+	// But the aggregates should be updated
+	for _, child := range tv.root.Children {
+		if child.Name == "dir1" {
+			// dir1 had 2 files of 100MiB each, now has 3 files totaling 225MiB
+			expectedSize := int64(1024 * 1024 * 225)
+			if child.LargeFileSize != expectedSize {
+				t.Errorf("expected dir1 LargeFileSize %d, got %d", expectedSize, child.LargeFileSize)
+			}
+			if child.LargeFileCount != 3 {
+				t.Errorf("expected dir1 LargeFileCount 3, got %d", child.LargeFileCount)
+			}
+			break
+		}
+	}
+}
+
+func TestTreeViewRemoveFile(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialCount := len(tv.flat)
+
+	// Remove file3 from dir2
+	// Since dir2 becomes empty, it will also be removed (cleanup empty dirs)
+	// So we lose both file3 and dir2: 4 - 2 = 2 visible nodes
+	tv.RemoveFile("/test/dir2/file3.txt")
+
+	// Should have two less visible nodes (file3 + empty dir2)
+	if len(tv.flat) != initialCount-2 {
+		t.Errorf("expected %d visible nodes after remove, got %d", initialCount-2, len(tv.flat))
+	}
+
+	// File should not be in flat list
+	for _, node := range tv.flat {
+		if node.Path == "/test/dir2/file3.txt" {
+			t.Error("expected file3.txt to be removed from flat list")
+		}
+	}
+
+	// dir2 should also be removed (empty directory cleanup)
+	for _, child := range tv.root.Children {
+		if child.Name == "dir2" {
+			t.Error("expected dir2 to be removed when empty")
+		}
+	}
+
+	// Root aggregate should be updated (only dir1's 200MiB remains)
+	expectedRootSize := int64(1024 * 1024 * 200)
+	if tv.root.LargeFileSize != expectedRootSize {
+		t.Errorf("expected root LargeFileSize %d, got %d", expectedRootSize, tv.root.LargeFileSize)
+	}
+}
+
+func TestTreeViewRemoveFileCleanupEmptyDirs(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Remove file3 from dir2, which should leave dir2 empty
+	tv.RemoveFile("/test/dir2/file3.txt")
+
+	// dir2 should be removed since it's now empty
+	found := false
+	for _, child := range tv.root.Children {
+		if child.Name == "dir2" {
+			found = true
+			break
+		}
+	}
+	if found {
+		t.Error("expected dir2 to be removed when empty")
+	}
+}
+
+func TestTreeViewRemoveFileCleansSelection(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Select file3
+	tv.MoveDown() // dir1
+	tv.MoveDown() // dir2
+	tv.MoveDown() // file3
+	tv.ToggleSelect()
+
+	if !tv.selected["/test/dir2/file3.txt"] {
+		t.Error("expected file3.txt to be selected")
+	}
+
+	// Remove the file
+	tv.RemoveFile("/test/dir2/file3.txt")
+
+	// Selection should be cleaned
+	if tv.selected["/test/dir2/file3.txt"] {
+		t.Error("expected file3.txt selection to be cleared after removal")
+	}
+}
+
+func TestTreeViewRemoveNonexistent(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialCount := len(tv.flat)
+
+	// Removing a non-existent file should be a no-op
+	tv.RemoveFile("/test/nonexistent.txt")
+
+	if len(tv.flat) != initialCount {
+		t.Errorf("expected %d visible nodes (no change), got %d", initialCount, len(tv.flat))
+	}
+}
+
+func TestTreeViewUpdateFile(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Update file3's size
+	oldSize := int64(1024 * 1024 * 50)
+	newSize := int64(1024 * 1024 * 100)
+	tv.UpdateFile("/test/dir2/file3.txt", newSize)
+
+	// Find the file and verify
+	for _, node := range tv.flat {
+		if node.Path == "/test/dir2/file3.txt" {
+			if node.Size != newSize {
+				t.Errorf("expected size %d, got %d", newSize, node.Size)
+			}
+			break
+		}
+	}
+
+	// Aggregates should be updated
+	for _, child := range tv.root.Children {
+		if child.Name == "dir2" {
+			if child.LargeFileSize != newSize {
+				t.Errorf("expected dir2 LargeFileSize %d, got %d", newSize, child.LargeFileSize)
+			}
+			break
+		}
+	}
+
+	// Root aggregate should also be updated
+	expectedRootSize := tv.root.LargeFileSize
+	// dir1 has 200MiB, dir2 now has 100MiB = 300MiB total
+	expectedTotal := int64(1024*1024*200) + newSize
+	if expectedRootSize != expectedTotal {
+		t.Errorf("expected root LargeFileSize %d, got %d", expectedTotal, expectedRootSize)
+	}
+
+	_ = oldSize // avoid unused variable warning
+}
+
+func TestTreeViewUpdateFileNonexistent(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	initialRootSize := tv.root.LargeFileSize
+
+	// Updating a non-existent file should be a no-op
+	tv.UpdateFile("/test/nonexistent.txt", 1024*1024*999)
+
+	if tv.root.LargeFileSize != initialRootSize {
+		t.Errorf("expected root LargeFileSize unchanged at %d, got %d", initialRootSize, tv.root.LargeFileSize)
+	}
+}
+
+func TestTreeViewUpdateFileResortsParent(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Initially dir1 (200MiB) should be before dir2 (50MiB)
+	if len(tv.root.Children) < 2 {
+		t.Fatal("expected at least 2 children")
+	}
+	if tv.root.Children[0].Name != "dir1" {
+		t.Errorf("expected dir1 first, got %s", tv.root.Children[0].Name)
+	}
+
+	// Update file3 to be massive (500MiB), making dir2 larger than dir1
+	tv.UpdateFile("/test/dir2/file3.txt", 1024*1024*500)
+
+	// Now dir2 should be first
+	if tv.root.Children[0].Name != "dir2" {
+		t.Errorf("expected dir2 first after size update, got %s", tv.root.Children[0].Name)
+	}
+}
+
+func TestTreeViewAddFileMaintainsSortOrder(t *testing.T) {
+	root := createTestTree()
+	tv := NewTreeView(root)
+
+	// Add a huge file to dir2, making it larger than dir1
+	tv.AddFile("/test/dir2/hugefile.bin", 1024*1024*500, 1234567890)
+
+	// dir2 should now be first (550MiB > 200MiB)
+	if tv.root.Children[0].Name != "dir2" {
+		t.Errorf("expected dir2 first after adding large file, got %s", tv.root.Children[0].Name)
 	}
 }

@@ -29,6 +29,12 @@ service SweepDaemon {
 
   // Watch for file system changes (create, modify, delete, rename) in real-time
   rpc WatchLargeFiles(WatchRequest) returns (stream FileEvent);
+
+  // Get a tree view of large files under a path
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse);
+
+  // Watch for tree changes (file create, modify, delete) in real-time
+  rpc WatchTree(WatchTreeRequest) returns (stream TreeEvent);
 }
 
 message GetLargeFilesRequest {
@@ -169,4 +175,55 @@ message FileEvent {
   string path = 2;
   int64 size = 3;
   int64 mod_time = 4;
+}
+
+// Tree node for hierarchical display
+message TreeNode {
+  string path = 1;
+  string name = 2;
+  bool is_dir = 3;
+
+  // For files
+  int64 size = 4;
+  int64 mod_time = 5;
+  string file_type = 6;
+
+  // For directories
+  int64 large_file_size = 7;
+  int32 large_file_count = 8;
+
+  // Children (only populated if expanded)
+  repeated TreeNode children = 9;
+}
+
+message GetTreeRequest {
+  string root = 1;
+  int64 min_size = 2;
+  repeated string exclude = 3;
+  int32 max_depth = 4; // 0 = unlimited
+}
+
+message GetTreeResponse {
+  TreeNode root = 1;
+  int64 total_indexed = 2;
+}
+
+// Request to watch for tree changes
+message WatchTreeRequest {
+  string root = 1;
+  int64 min_size = 2;
+}
+
+// Event emitted when a tree node changes
+message TreeEvent {
+  enum Type {
+    CREATED = 0;
+    MODIFIED = 1;
+    DELETED = 2;
+  }
+  Type type = 1;
+  string path = 2;
+  int64 size = 3;
+  int64 mod_time = 4;
+  string parent_path = 5;
 }

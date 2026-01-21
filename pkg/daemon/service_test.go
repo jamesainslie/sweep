@@ -440,3 +440,112 @@ func TestServiceShutdown(t *testing.T) {
 		t.Error("Expected shutdown success")
 	}
 }
+
+func TestServiceGetTree(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "test.sock")
+
+	// Create test directory structure with subdirectories
+	testDir := filepath.Join(tmpDir, "testdata")
+	if err := os.MkdirAll(filepath.Join(testDir, "subdir"), 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	// Create files in root and subdir
+	if err := os.WriteFile(filepath.Join(testDir, "large.txt"), make([]byte, 10000), 0644); err != nil {
+		t.Fatalf("failed to create large.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "subdir", "huge.dat"), make([]byte, 100000), 0644); err != nil {
+		t.Fatalf("failed to create subdir/huge.dat: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "small.txt"), make([]byte, 100), 0644); err != nil {
+		t.Fatalf("failed to create small.txt: %v", err)
+	}
+
+	cfg := daemon.Config{
+		SocketPath:       socketPath,
+		DataDir:          filepath.Join(tmpDir, "data"),
+		MinLargeFileSize: 5000, // Lower threshold for testing
+	}
+
+	srv, err := daemon.NewServer(cfg)
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	go func() {
+		_ = srv.Serve()
+	}()
+	defer func() {
+		_ = srv.Close()
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	conn, err := grpc.NewClient(
+		"unix://"+socketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	client := sweepv1.NewSweepDaemonClient(conn)
+
+	// Trigger indexing first
+	_, err = client.TriggerIndex(context.Background(), &sweepv1.TriggerIndexRequest{
+		Path: testDir,
+	})
+	if err != nil {
+		t.Fatalf("TriggerIndex failed: %v", err)
+	}
+
+	// Wait for indexing
+	time.Sleep(500 * time.Millisecond)
+
+	// Get tree
+	resp, err := client.GetTree(context.Background(), &sweepv1.GetTreeRequest{
+		Root:    testDir,
+		MinSize: 5000,
+	})
+	if err != nil {
+		t.Fatalf("GetTree failed: %v", err)
+	}
+
+	// Verify response
+	if resp.GetRoot() == nil {
+		t.Fatal("Expected root node in response")
+	}
+
+	root := resp.GetRoot()
+	if root.GetPath() != testDir {
+		t.Errorf("Expected root path %s, got %s", testDir, root.GetPath())
+	}
+
+	if !root.GetIsDir() {
+		t.Error("Expected root to be a directory")
+	}
+
+	// Should have 2 large files total (large.txt and subdir/huge.dat)
+	if resp.GetTotalIndexed() != 2 {
+		t.Errorf("Expected 2 total indexed files, got %d", resp.GetTotalIndexed())
+	}
+
+	// Root should have children (subdir and large.txt)
+	if len(root.GetChildren()) == 0 {
+		t.Error("Expected root to have children")
+	}
+
+	// Verify aggregate stats on root
+	if root.GetLargeFileCount() != 2 {
+		t.Errorf("Expected root LargeFileCount=2, got %d", root.GetLargeFileCount())
+	}
+
+	expectedSize := int64(10000 + 100000) // large.txt + huge.dat
+	if root.GetLargeFileSize() != expectedSize {
+		t.Errorf("Expected root LargeFileSize=%d, got %d", expectedSize, root.GetLargeFileSize())
+	}
+}

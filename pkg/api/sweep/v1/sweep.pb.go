@@ -181,6 +181,55 @@ func (FileEvent_EventType) EnumDescriptor() ([]byte, []int) {
 	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{15, 0}
 }
 
+type TreeEvent_Type int32
+
+const (
+	TreeEvent_CREATED  TreeEvent_Type = 0
+	TreeEvent_MODIFIED TreeEvent_Type = 1
+	TreeEvent_DELETED  TreeEvent_Type = 2
+)
+
+// Enum value maps for TreeEvent_Type.
+var (
+	TreeEvent_Type_name = map[int32]string{
+		0: "CREATED",
+		1: "MODIFIED",
+		2: "DELETED",
+	}
+	TreeEvent_Type_value = map[string]int32{
+		"CREATED":  0,
+		"MODIFIED": 1,
+		"DELETED":  2,
+	}
+)
+
+func (x TreeEvent_Type) Enum() *TreeEvent_Type {
+	p := new(TreeEvent_Type)
+	*p = x
+	return p
+}
+
+func (x TreeEvent_Type) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TreeEvent_Type) Descriptor() protoreflect.EnumDescriptor {
+	return file_sweep_v1_sweep_proto_enumTypes[3].Descriptor()
+}
+
+func (TreeEvent_Type) Type() protoreflect.EnumType {
+	return &file_sweep_v1_sweep_proto_enumTypes[3]
+}
+
+func (x TreeEvent_Type) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TreeEvent_Type.Descriptor instead.
+func (TreeEvent_Type) EnumDescriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{20, 0}
+}
+
 type GetLargeFilesRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Path    string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
@@ -1207,6 +1256,368 @@ func (x *FileEvent) GetModTime() int64 {
 	return 0
 }
 
+// Tree node for hierarchical display
+type TreeNode struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Path  string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Name  string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	IsDir bool                   `protobuf:"varint,3,opt,name=is_dir,json=isDir,proto3" json:"is_dir,omitempty"`
+	// For files
+	Size     int64  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	ModTime  int64  `protobuf:"varint,5,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
+	FileType string `protobuf:"bytes,6,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	// For directories
+	LargeFileSize  int64 `protobuf:"varint,7,opt,name=large_file_size,json=largeFileSize,proto3" json:"large_file_size,omitempty"`
+	LargeFileCount int32 `protobuf:"varint,8,opt,name=large_file_count,json=largeFileCount,proto3" json:"large_file_count,omitempty"`
+	// Children (only populated if expanded)
+	Children      []*TreeNode `protobuf:"bytes,9,rep,name=children,proto3" json:"children,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TreeNode) Reset() {
+	*x = TreeNode{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TreeNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TreeNode) ProtoMessage() {}
+
+func (x *TreeNode) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TreeNode.ProtoReflect.Descriptor instead.
+func (*TreeNode) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *TreeNode) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *TreeNode) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TreeNode) GetIsDir() bool {
+	if x != nil {
+		return x.IsDir
+	}
+	return false
+}
+
+func (x *TreeNode) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *TreeNode) GetModTime() int64 {
+	if x != nil {
+		return x.ModTime
+	}
+	return 0
+}
+
+func (x *TreeNode) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *TreeNode) GetLargeFileSize() int64 {
+	if x != nil {
+		return x.LargeFileSize
+	}
+	return 0
+}
+
+func (x *TreeNode) GetLargeFileCount() int32 {
+	if x != nil {
+		return x.LargeFileCount
+	}
+	return 0
+}
+
+func (x *TreeNode) GetChildren() []*TreeNode {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
+type GetTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	MinSize       int64                  `protobuf:"varint,2,opt,name=min_size,json=minSize,proto3" json:"min_size,omitempty"`
+	Exclude       []string               `protobuf:"bytes,3,rep,name=exclude,proto3" json:"exclude,omitempty"`
+	MaxDepth      int32                  `protobuf:"varint,4,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"` // 0 = unlimited
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTreeRequest) Reset() {
+	*x = GetTreeRequest{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTreeRequest) ProtoMessage() {}
+
+func (x *GetTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTreeRequest.ProtoReflect.Descriptor instead.
+func (*GetTreeRequest) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetTreeRequest) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+func (x *GetTreeRequest) GetMinSize() int64 {
+	if x != nil {
+		return x.MinSize
+	}
+	return 0
+}
+
+func (x *GetTreeRequest) GetExclude() []string {
+	if x != nil {
+		return x.Exclude
+	}
+	return nil
+}
+
+func (x *GetTreeRequest) GetMaxDepth() int32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+type GetTreeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Root          *TreeNode              `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	TotalIndexed  int64                  `protobuf:"varint,2,opt,name=total_indexed,json=totalIndexed,proto3" json:"total_indexed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTreeResponse) Reset() {
+	*x = GetTreeResponse{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTreeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTreeResponse) ProtoMessage() {}
+
+func (x *GetTreeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTreeResponse.ProtoReflect.Descriptor instead.
+func (*GetTreeResponse) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GetTreeResponse) GetRoot() *TreeNode {
+	if x != nil {
+		return x.Root
+	}
+	return nil
+}
+
+func (x *GetTreeResponse) GetTotalIndexed() int64 {
+	if x != nil {
+		return x.TotalIndexed
+	}
+	return 0
+}
+
+// Request to watch for tree changes
+type WatchTreeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	MinSize       int64                  `protobuf:"varint,2,opt,name=min_size,json=minSize,proto3" json:"min_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchTreeRequest) Reset() {
+	*x = WatchTreeRequest{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchTreeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchTreeRequest) ProtoMessage() {}
+
+func (x *WatchTreeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchTreeRequest.ProtoReflect.Descriptor instead.
+func (*WatchTreeRequest) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *WatchTreeRequest) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+func (x *WatchTreeRequest) GetMinSize() int64 {
+	if x != nil {
+		return x.MinSize
+	}
+	return 0
+}
+
+// Event emitted when a tree node changes
+type TreeEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          TreeEvent_Type         `protobuf:"varint,1,opt,name=type,proto3,enum=sweep.v1.TreeEvent_Type" json:"type,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	ModTime       int64                  `protobuf:"varint,4,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
+	ParentPath    string                 `protobuf:"bytes,5,opt,name=parent_path,json=parentPath,proto3" json:"parent_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TreeEvent) Reset() {
+	*x = TreeEvent{}
+	mi := &file_sweep_v1_sweep_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TreeEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TreeEvent) ProtoMessage() {}
+
+func (x *TreeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_sweep_v1_sweep_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TreeEvent.ProtoReflect.Descriptor instead.
+func (*TreeEvent) Descriptor() ([]byte, []int) {
+	return file_sweep_v1_sweep_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *TreeEvent) GetType() TreeEvent_Type {
+	if x != nil {
+		return x.Type
+	}
+	return TreeEvent_CREATED
+}
+
+func (x *TreeEvent) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *TreeEvent) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *TreeEvent) GetModTime() int64 {
+	if x != nil {
+		return x.ModTime
+	}
+	return 0
+}
+
+func (x *TreeEvent) GetParentPath() string {
+	if x != nil {
+		return x.ParentPath
+	}
+	return ""
+}
+
 var File_sweep_v1_sweep_proto protoreflect.FileDescriptor
 
 const file_sweep_v1_sweep_proto_rawDesc = "" +
@@ -1293,7 +1704,39 @@ const file_sweep_v1_sweep_proto_rawDesc = "" +
 	"\aCREATED\x10\x00\x12\f\n" +
 	"\bMODIFIED\x10\x01\x12\v\n" +
 	"\aDELETED\x10\x02\x12\v\n" +
-	"\aRENAMED\x10\x03*\x8a\x01\n" +
+	"\aRENAMED\x10\x03\"\x97\x02\n" +
+	"\bTreeNode\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x15\n" +
+	"\x06is_dir\x18\x03 \x01(\bR\x05isDir\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\x12\x19\n" +
+	"\bmod_time\x18\x05 \x01(\x03R\amodTime\x12\x1b\n" +
+	"\tfile_type\x18\x06 \x01(\tR\bfileType\x12&\n" +
+	"\x0flarge_file_size\x18\a \x01(\x03R\rlargeFileSize\x12(\n" +
+	"\x10large_file_count\x18\b \x01(\x05R\x0elargeFileCount\x12.\n" +
+	"\bchildren\x18\t \x03(\v2\x12.sweep.v1.TreeNodeR\bchildren\"v\n" +
+	"\x0eGetTreeRequest\x12\x12\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root\x12\x19\n" +
+	"\bmin_size\x18\x02 \x01(\x03R\aminSize\x12\x18\n" +
+	"\aexclude\x18\x03 \x03(\tR\aexclude\x12\x1b\n" +
+	"\tmax_depth\x18\x04 \x01(\x05R\bmaxDepth\"^\n" +
+	"\x0fGetTreeResponse\x12&\n" +
+	"\x04root\x18\x01 \x01(\v2\x12.sweep.v1.TreeNodeR\x04root\x12#\n" +
+	"\rtotal_indexed\x18\x02 \x01(\x03R\ftotalIndexed\"A\n" +
+	"\x10WatchTreeRequest\x12\x12\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root\x12\x19\n" +
+	"\bmin_size\x18\x02 \x01(\x03R\aminSize\"\xcd\x01\n" +
+	"\tTreeEvent\x12,\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x18.sweep.v1.TreeEvent.TypeR\x04type\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x19\n" +
+	"\bmod_time\x18\x04 \x01(\x03R\amodTime\x12\x1f\n" +
+	"\vparent_path\x18\x05 \x01(\tR\n" +
+	"parentPath\".\n" +
+	"\x04Type\x12\v\n" +
+	"\aCREATED\x10\x00\x12\f\n" +
+	"\bMODIFIED\x10\x01\x12\v\n" +
+	"\aDELETED\x10\x02*\x8a\x01\n" +
 	"\n" +
 	"IndexState\x12\x17\n" +
 	"\x13INDEX_STATE_UNKNOWN\x10\x00\x12\x1b\n" +
@@ -1304,7 +1747,7 @@ const file_sweep_v1_sweep_proto_rawDesc = "" +
 	"\tSortField\x12\r\n" +
 	"\tSORT_SIZE\x10\x00\x12\x11\n" +
 	"\rSORT_MOD_TIME\x10\x01\x12\r\n" +
-	"\tSORT_PATH\x10\x022\xde\x04\n" +
+	"\tSORT_PATH\x10\x022\xde\x05\n" +
 	"\vSweepDaemon\x12E\n" +
 	"\rGetLargeFiles\x12\x1e.sweep.v1.GetLargeFilesRequest\x1a\x12.sweep.v1.FileInfo0\x01\x12H\n" +
 	"\x0eGetIndexStatus\x12\x1f.sweep.v1.GetIndexStatusRequest\x1a\x15.sweep.v1.IndexStatus\x12M\n" +
@@ -1314,7 +1757,9 @@ const file_sweep_v1_sweep_proto_rawDesc = "" +
 	"\bShutdown\x12\x19.sweep.v1.ShutdownRequest\x1a\x1a.sweep.v1.ShutdownResponse\x12G\n" +
 	"\n" +
 	"ClearCache\x12\x1b.sweep.v1.ClearCacheRequest\x1a\x1c.sweep.v1.ClearCacheResponse\x12@\n" +
-	"\x0fWatchLargeFiles\x12\x16.sweep.v1.WatchRequest\x1a\x13.sweep.v1.FileEvent0\x01B8Z6github.com/jamesainslie/sweep/pkg/api/sweep/v1;sweepv1b\x06proto3"
+	"\x0fWatchLargeFiles\x12\x16.sweep.v1.WatchRequest\x1a\x13.sweep.v1.FileEvent0\x01\x12>\n" +
+	"\aGetTree\x12\x18.sweep.v1.GetTreeRequest\x1a\x19.sweep.v1.GetTreeResponse\x12>\n" +
+	"\tWatchTree\x12\x1a.sweep.v1.WatchTreeRequest\x1a\x13.sweep.v1.TreeEvent0\x01B8Z6github.com/jamesainslie/sweep/pkg/api/sweep/v1;sweepv1b\x06proto3"
 
 var (
 	file_sweep_v1_sweep_proto_rawDescOnce sync.Once
@@ -1328,55 +1773,68 @@ func file_sweep_v1_sweep_proto_rawDescGZIP() []byte {
 	return file_sweep_v1_sweep_proto_rawDescData
 }
 
-var file_sweep_v1_sweep_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_sweep_v1_sweep_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_sweep_v1_sweep_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_sweep_v1_sweep_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_sweep_v1_sweep_proto_goTypes = []any{
 	(IndexState)(0),                   // 0: sweep.v1.IndexState
 	(SortField)(0),                    // 1: sweep.v1.SortField
 	(FileEvent_EventType)(0),          // 2: sweep.v1.FileEvent.EventType
-	(*GetLargeFilesRequest)(nil),      // 3: sweep.v1.GetLargeFilesRequest
-	(*FileInfo)(nil),                  // 4: sweep.v1.FileInfo
-	(*GetIndexStatusRequest)(nil),     // 5: sweep.v1.GetIndexStatusRequest
-	(*IndexStatus)(nil),               // 6: sweep.v1.IndexStatus
-	(*TriggerIndexRequest)(nil),       // 7: sweep.v1.TriggerIndexRequest
-	(*TriggerIndexResponse)(nil),      // 8: sweep.v1.TriggerIndexResponse
-	(*WatchIndexProgressRequest)(nil), // 9: sweep.v1.WatchIndexProgressRequest
-	(*IndexProgress)(nil),             // 10: sweep.v1.IndexProgress
-	(*GetDaemonStatusRequest)(nil),    // 11: sweep.v1.GetDaemonStatusRequest
-	(*DaemonStatus)(nil),              // 12: sweep.v1.DaemonStatus
-	(*ShutdownRequest)(nil),           // 13: sweep.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),          // 14: sweep.v1.ShutdownResponse
-	(*ClearCacheRequest)(nil),         // 15: sweep.v1.ClearCacheRequest
-	(*ClearCacheResponse)(nil),        // 16: sweep.v1.ClearCacheResponse
-	(*WatchRequest)(nil),              // 17: sweep.v1.WatchRequest
-	(*FileEvent)(nil),                 // 18: sweep.v1.FileEvent
+	(TreeEvent_Type)(0),               // 3: sweep.v1.TreeEvent.Type
+	(*GetLargeFilesRequest)(nil),      // 4: sweep.v1.GetLargeFilesRequest
+	(*FileInfo)(nil),                  // 5: sweep.v1.FileInfo
+	(*GetIndexStatusRequest)(nil),     // 6: sweep.v1.GetIndexStatusRequest
+	(*IndexStatus)(nil),               // 7: sweep.v1.IndexStatus
+	(*TriggerIndexRequest)(nil),       // 8: sweep.v1.TriggerIndexRequest
+	(*TriggerIndexResponse)(nil),      // 9: sweep.v1.TriggerIndexResponse
+	(*WatchIndexProgressRequest)(nil), // 10: sweep.v1.WatchIndexProgressRequest
+	(*IndexProgress)(nil),             // 11: sweep.v1.IndexProgress
+	(*GetDaemonStatusRequest)(nil),    // 12: sweep.v1.GetDaemonStatusRequest
+	(*DaemonStatus)(nil),              // 13: sweep.v1.DaemonStatus
+	(*ShutdownRequest)(nil),           // 14: sweep.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),          // 15: sweep.v1.ShutdownResponse
+	(*ClearCacheRequest)(nil),         // 16: sweep.v1.ClearCacheRequest
+	(*ClearCacheResponse)(nil),        // 17: sweep.v1.ClearCacheResponse
+	(*WatchRequest)(nil),              // 18: sweep.v1.WatchRequest
+	(*FileEvent)(nil),                 // 19: sweep.v1.FileEvent
+	(*TreeNode)(nil),                  // 20: sweep.v1.TreeNode
+	(*GetTreeRequest)(nil),            // 21: sweep.v1.GetTreeRequest
+	(*GetTreeResponse)(nil),           // 22: sweep.v1.GetTreeResponse
+	(*WatchTreeRequest)(nil),          // 23: sweep.v1.WatchTreeRequest
+	(*TreeEvent)(nil),                 // 24: sweep.v1.TreeEvent
 }
 var file_sweep_v1_sweep_proto_depIdxs = []int32{
 	1,  // 0: sweep.v1.GetLargeFilesRequest.sort_by:type_name -> sweep.v1.SortField
 	0,  // 1: sweep.v1.IndexStatus.state:type_name -> sweep.v1.IndexState
 	0,  // 2: sweep.v1.IndexProgress.state:type_name -> sweep.v1.IndexState
 	2,  // 3: sweep.v1.FileEvent.type:type_name -> sweep.v1.FileEvent.EventType
-	3,  // 4: sweep.v1.SweepDaemon.GetLargeFiles:input_type -> sweep.v1.GetLargeFilesRequest
-	5,  // 5: sweep.v1.SweepDaemon.GetIndexStatus:input_type -> sweep.v1.GetIndexStatusRequest
-	7,  // 6: sweep.v1.SweepDaemon.TriggerIndex:input_type -> sweep.v1.TriggerIndexRequest
-	9,  // 7: sweep.v1.SweepDaemon.WatchIndexProgress:input_type -> sweep.v1.WatchIndexProgressRequest
-	11, // 8: sweep.v1.SweepDaemon.GetDaemonStatus:input_type -> sweep.v1.GetDaemonStatusRequest
-	13, // 9: sweep.v1.SweepDaemon.Shutdown:input_type -> sweep.v1.ShutdownRequest
-	15, // 10: sweep.v1.SweepDaemon.ClearCache:input_type -> sweep.v1.ClearCacheRequest
-	17, // 11: sweep.v1.SweepDaemon.WatchLargeFiles:input_type -> sweep.v1.WatchRequest
-	4,  // 12: sweep.v1.SweepDaemon.GetLargeFiles:output_type -> sweep.v1.FileInfo
-	6,  // 13: sweep.v1.SweepDaemon.GetIndexStatus:output_type -> sweep.v1.IndexStatus
-	8,  // 14: sweep.v1.SweepDaemon.TriggerIndex:output_type -> sweep.v1.TriggerIndexResponse
-	10, // 15: sweep.v1.SweepDaemon.WatchIndexProgress:output_type -> sweep.v1.IndexProgress
-	12, // 16: sweep.v1.SweepDaemon.GetDaemonStatus:output_type -> sweep.v1.DaemonStatus
-	14, // 17: sweep.v1.SweepDaemon.Shutdown:output_type -> sweep.v1.ShutdownResponse
-	16, // 18: sweep.v1.SweepDaemon.ClearCache:output_type -> sweep.v1.ClearCacheResponse
-	18, // 19: sweep.v1.SweepDaemon.WatchLargeFiles:output_type -> sweep.v1.FileEvent
-	12, // [12:20] is the sub-list for method output_type
-	4,  // [4:12] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	20, // 4: sweep.v1.TreeNode.children:type_name -> sweep.v1.TreeNode
+	20, // 5: sweep.v1.GetTreeResponse.root:type_name -> sweep.v1.TreeNode
+	3,  // 6: sweep.v1.TreeEvent.type:type_name -> sweep.v1.TreeEvent.Type
+	4,  // 7: sweep.v1.SweepDaemon.GetLargeFiles:input_type -> sweep.v1.GetLargeFilesRequest
+	6,  // 8: sweep.v1.SweepDaemon.GetIndexStatus:input_type -> sweep.v1.GetIndexStatusRequest
+	8,  // 9: sweep.v1.SweepDaemon.TriggerIndex:input_type -> sweep.v1.TriggerIndexRequest
+	10, // 10: sweep.v1.SweepDaemon.WatchIndexProgress:input_type -> sweep.v1.WatchIndexProgressRequest
+	12, // 11: sweep.v1.SweepDaemon.GetDaemonStatus:input_type -> sweep.v1.GetDaemonStatusRequest
+	14, // 12: sweep.v1.SweepDaemon.Shutdown:input_type -> sweep.v1.ShutdownRequest
+	16, // 13: sweep.v1.SweepDaemon.ClearCache:input_type -> sweep.v1.ClearCacheRequest
+	18, // 14: sweep.v1.SweepDaemon.WatchLargeFiles:input_type -> sweep.v1.WatchRequest
+	21, // 15: sweep.v1.SweepDaemon.GetTree:input_type -> sweep.v1.GetTreeRequest
+	23, // 16: sweep.v1.SweepDaemon.WatchTree:input_type -> sweep.v1.WatchTreeRequest
+	5,  // 17: sweep.v1.SweepDaemon.GetLargeFiles:output_type -> sweep.v1.FileInfo
+	7,  // 18: sweep.v1.SweepDaemon.GetIndexStatus:output_type -> sweep.v1.IndexStatus
+	9,  // 19: sweep.v1.SweepDaemon.TriggerIndex:output_type -> sweep.v1.TriggerIndexResponse
+	11, // 20: sweep.v1.SweepDaemon.WatchIndexProgress:output_type -> sweep.v1.IndexProgress
+	13, // 21: sweep.v1.SweepDaemon.GetDaemonStatus:output_type -> sweep.v1.DaemonStatus
+	15, // 22: sweep.v1.SweepDaemon.Shutdown:output_type -> sweep.v1.ShutdownResponse
+	17, // 23: sweep.v1.SweepDaemon.ClearCache:output_type -> sweep.v1.ClearCacheResponse
+	19, // 24: sweep.v1.SweepDaemon.WatchLargeFiles:output_type -> sweep.v1.FileEvent
+	22, // 25: sweep.v1.SweepDaemon.GetTree:output_type -> sweep.v1.GetTreeResponse
+	24, // 26: sweep.v1.SweepDaemon.WatchTree:output_type -> sweep.v1.TreeEvent
+	17, // [17:27] is the sub-list for method output_type
+	7,  // [7:17] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_sweep_v1_sweep_proto_init() }
@@ -1389,8 +1847,8 @@ func file_sweep_v1_sweep_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sweep_v1_sweep_proto_rawDesc), len(file_sweep_v1_sweep_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   16,
+			NumEnums:      4,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

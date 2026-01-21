@@ -16,6 +16,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/broadcaster"
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
+	"github.com/jamesainslie/sweep/pkg/daemon/tree"
 	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
@@ -480,4 +481,111 @@ func (s *Service) WatchLargeFiles(req *sweepv1.WatchRequest, stream grpc.ServerS
 			}
 		}
 	}
+}
+
+// WatchTree streams tree events for files in real-time.
+// Unlike WatchLargeFiles, TreeEvent includes the parent_path field for tree updates.
+func (s *Service) WatchTree(req *sweepv1.WatchTreeRequest, stream grpc.ServerStreamingServer[sweepv1.TreeEvent]) error {
+	if s.broadcaster == nil {
+		return status.Error(codes.Unavailable, "file watching not available")
+	}
+
+	sub := s.broadcaster.Subscribe(req.GetRoot(), req.GetMinSize(), nil)
+	if sub == nil {
+		return status.Error(codes.Unavailable, "failed to subscribe")
+	}
+	defer s.broadcaster.Unsubscribe(sub.ID)
+
+	ctx := stream.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-sub.Events:
+			if !ok {
+				return nil
+			}
+
+			treeEvent := &sweepv1.TreeEvent{
+				Path:       event.Path,
+				Size:       event.Size,
+				ModTime:    event.ModTime,
+				ParentPath: filepath.Dir(event.Path),
+			}
+
+			switch event.Type {
+			case broadcaster.EventCreated:
+				treeEvent.Type = sweepv1.TreeEvent_CREATED
+			case broadcaster.EventModified:
+				treeEvent.Type = sweepv1.TreeEvent_MODIFIED
+			case broadcaster.EventDeleted:
+				treeEvent.Type = sweepv1.TreeEvent_DELETED
+			}
+
+			if err := stream.Send(treeEvent); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// GetTree returns a tree view of large files under a path.
+func (s *Service) GetTree(_ context.Context, req *sweepv1.GetTreeRequest) (*sweepv1.GetTreeResponse, error) {
+	root := req.GetRoot()
+	minSize := req.GetMinSize()
+
+	// Query large files from store
+	entries, err := s.store.GetLargeFiles(root, minSize, 0) // 0 = no limit
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get large files: %v", err)
+	}
+
+	// Convert store entries to tree.LargeFile
+	files := make([]tree.LargeFile, 0, len(entries))
+	for _, e := range entries {
+		files = append(files, tree.LargeFile{
+			Path:    e.Path,
+			Size:    e.Size,
+			ModTime: e.ModTime,
+		})
+	}
+
+	// Build the tree
+	treeRoot := tree.BuildTree(root, files, minSize)
+
+	// Convert to proto
+	protoRoot := nodeToProto(treeRoot)
+
+	return &sweepv1.GetTreeResponse{
+		Root:         protoRoot,
+		TotalIndexed: int64(len(entries)),
+	}, nil
+}
+
+// nodeToProto recursively converts a tree.Node to a sweepv1.TreeNode.
+func nodeToProto(n *tree.Node) *sweepv1.TreeNode {
+	if n == nil {
+		return nil
+	}
+
+	protoNode := &sweepv1.TreeNode{
+		Path:           n.Path,
+		Name:           n.Name,
+		IsDir:          n.IsDir,
+		Size:           n.Size,
+		ModTime:        n.ModTime,
+		FileType:       n.FileType,
+		LargeFileSize:  n.LargeFileSize,
+		LargeFileCount: int32(n.LargeFileCount),
+	}
+
+	// Convert children recursively
+	if len(n.Children) > 0 {
+		protoNode.Children = make([]*sweepv1.TreeNode, 0, len(n.Children))
+		for _, child := range n.Children {
+			protoNode.Children = append(protoNode.Children, nodeToProto(child))
+		}
+	}
+
+	return protoNode
 }

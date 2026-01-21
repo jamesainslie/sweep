@@ -60,6 +60,29 @@ type FileEvent struct {
 	ModTime int64
 }
 
+// TreeEvent represents a tree change event from the daemon.
+// It includes ParentPath to enable efficient tree updates.
+type TreeEvent struct {
+	Type       string // "created", "modified", "deleted"
+	Path       string
+	Size       int64
+	ModTime    int64
+	ParentPath string
+}
+
+// TreeNode represents a node in the large file tree.
+type TreeNode struct {
+	Path           string
+	Name           string
+	IsDir          bool
+	Size           int64
+	ModTime        int64
+	FileType       string
+	LargeFileSize  int64
+	LargeFileCount int
+	Children       []*TreeNode
+}
+
 // DefaultSocketPath returns the default Unix socket path for sweepd.
 func DefaultSocketPath() string {
 	return filepath.Join(xdg.DataHome, "sweep", "sweep.sock")
@@ -315,6 +338,100 @@ func eventTypeToString(t sweepv1.FileEvent_EventType) string {
 	default:
 		return "unknown"
 	}
+}
+
+// WatchTree subscribes to tree events for files under a path.
+// Returns a channel that receives TreeEvent updates until the context is cancelled.
+// TreeEvent includes ParentPath to enable efficient tree updates.
+func (c *Client) WatchTree(ctx context.Context, root string, minSize int64) (<-chan TreeEvent, error) {
+	stream, err := c.client.WatchTree(ctx, &sweepv1.WatchTreeRequest{
+		Root:    root,
+		MinSize: minSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("WatchTree RPC failed: %w", err)
+	}
+
+	events := make(chan TreeEvent, 100)
+	go func() {
+		defer close(events)
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				return // Stream closed or error
+			}
+
+			var eventType string
+			switch event.GetType() {
+			case sweepv1.TreeEvent_CREATED:
+				eventType = "created"
+			case sweepv1.TreeEvent_MODIFIED:
+				eventType = "modified"
+			case sweepv1.TreeEvent_DELETED:
+				eventType = "deleted"
+			default:
+				eventType = "unknown"
+			}
+
+			select {
+			case events <- TreeEvent{
+				Type:       eventType,
+				Path:       event.GetPath(),
+				Size:       event.GetSize(),
+				ModTime:    event.GetModTime(),
+				ParentPath: event.GetParentPath(),
+			}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return events, nil
+}
+
+// GetTree queries the daemon for a tree view of large files.
+func (c *Client) GetTree(ctx context.Context, root string, minSize int64, exclude []string) (*TreeNode, error) {
+	req := &sweepv1.GetTreeRequest{
+		Root:    root,
+		MinSize: minSize,
+		Exclude: exclude,
+	}
+
+	resp, err := c.client.GetTree(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("GetTree RPC failed: %w", err)
+	}
+
+	return protoToTreeNode(resp.GetRoot()), nil
+}
+
+// protoToTreeNode converts a proto TreeNode to a client TreeNode.
+func protoToTreeNode(p *sweepv1.TreeNode) *TreeNode {
+	if p == nil {
+		return nil
+	}
+
+	node := &TreeNode{
+		Path:           p.GetPath(),
+		Name:           p.GetName(),
+		IsDir:          p.GetIsDir(),
+		Size:           p.GetSize(),
+		ModTime:        p.GetModTime(),
+		FileType:       p.GetFileType(),
+		LargeFileSize:  p.GetLargeFileSize(),
+		LargeFileCount: int(p.GetLargeFileCount()),
+	}
+
+	// Convert children recursively
+	if len(p.GetChildren()) > 0 {
+		node.Children = make([]*TreeNode, 0, len(p.GetChildren()))
+		for _, child := range p.GetChildren() {
+			node.Children = append(node.Children, protoToTreeNode(child))
+		}
+	}
+
+	return node
 }
 
 // EnsureDaemon ensures the daemon is running, starting it if necessary.

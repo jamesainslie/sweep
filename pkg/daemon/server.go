@@ -26,10 +26,10 @@ type Config struct {
 
 // MigrationStatus represents the current migration state.
 type MigrationStatus struct {
-	Running      bool
-	Progress     store.MigrationProgress
-	Error        error
-	Completed    bool
+	Running       bool
+	Progress      store.MigrationProgress
+	Error         error
+	Completed     bool
 	MigrationsRun int
 }
 

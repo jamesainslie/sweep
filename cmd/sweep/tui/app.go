@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,9 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jamesainslie/sweep/pkg/client"
+	"github.com/jamesainslie/sweep/pkg/daemon/tree"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
+	"github.com/jamesainslie/sweep/pkg/sweep/trash"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
 
@@ -85,6 +86,10 @@ type Model struct {
 	resultModel ResultModel
 	options     Options
 
+	// Tree view state
+	treeView *TreeView
+	treeMode bool // true = tree view, false = legacy flat list
+
 	// Scanning state
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -96,6 +101,10 @@ type Model struct {
 	// Live file events state
 	liveEventChan <-chan client.FileEvent
 	liveWatching  bool
+
+	// Tree live events state
+	treeEventChan <-chan client.TreeEvent
+	treeWatching  bool
 
 	// Notifications for live events
 	notifications []Notification
@@ -170,6 +179,7 @@ func (m Model) Init() tea.Cmd {
 		m.listenForProgress(),
 		m.listenForLogEntries(),
 		m.tickUI(),
+		m.loadTree(), // Attempt to load tree view from daemon
 	)
 }
 
@@ -220,6 +230,34 @@ type LogEntryMsg struct {
 	Entry logging.LogEntry
 }
 
+// TreeLoadedMsg is sent when tree data is loaded from the daemon.
+type TreeLoadedMsg struct {
+	Root *client.TreeNode
+}
+
+// TreeErrorMsg is sent when tree loading fails.
+type TreeErrorMsg struct {
+	Err error
+}
+
+// TreeWatchStartedMsg is sent when tree watching starts successfully.
+type TreeWatchStartedMsg struct {
+	EventChan <-chan client.TreeEvent
+}
+
+// TreeWatchErrorMsg is sent when tree watching encounters an error.
+type TreeWatchErrorMsg struct {
+	Err error
+}
+
+// TreeEventMsg is sent when a tree event is received from the daemon.
+type TreeEventMsg struct {
+	Event client.TreeEvent
+}
+
+// TreeWatchEndedMsg is sent when the tree watch stream closes.
+type TreeWatchEndedMsg struct{}
+
 // Update handles messages.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -250,8 +288,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusHint = nil
 		}
 
-		// Keep UI refreshing during scanning, live watching, notifications, or status hint
-		if !m.scanDone || m.liveWatching || len(m.notifications) > 0 || m.statusHint != nil {
+		// Keep UI refreshing during scanning, live watching, tree watching, notifications, or status hint
+		if !m.scanDone || m.liveWatching || m.treeWatching || len(m.notifications) > 0 || m.statusHint != nil {
 			return m, m.tickUI()
 		}
 		return m, nil
@@ -407,6 +445,79 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep listening for more log entries
 		return m, m.listenForLogEntries()
 
+	case TreeLoadedMsg:
+		// Convert client tree to internal tree representation
+		treeRoot := convertClientTreeToNode(msg.Root)
+		if treeRoot != nil {
+			m.treeView = NewTreeView(treeRoot)
+			m.treeMode = true
+			logging.Get("tui").Info("tree view loaded",
+				"nodes", len(m.treeView.flat),
+				"largeFileSize", types.FormatSize(treeRoot.LargeFileSize))
+			// Start watching for tree updates
+			if !m.options.NoDaemon {
+				return m, m.startTreeWatch()
+			}
+		}
+		return m, nil
+
+	case TreeErrorMsg:
+		// Tree loading failed, stay in flat list mode
+		logging.Get("tui").Debug("tree view unavailable", "error", msg.Err)
+		m.treeMode = false
+		return m, nil
+
+	case TreeWatchStartedMsg:
+		m.treeWatching = true
+		m.treeEventChan = msg.EventChan
+		logging.Get("tui").Debug("tree watch started")
+		return m, m.listenForTreeEvents()
+
+	case TreeWatchErrorMsg:
+		// Tree watching failed, continue without it
+		m.treeWatching = false
+		logging.Get("tui").Debug("tree watch unavailable", "error", msg.Err)
+		return m, nil
+
+	case TreeWatchEndedMsg:
+		m.treeWatching = false
+		logging.Get("tui").Debug("tree watch ended")
+		return m, nil
+
+	case TreeEventMsg:
+		if m.treeView == nil {
+			return m, m.listenForTreeEvents()
+		}
+
+		now := time.Now()
+		switch msg.Event.Type {
+		case "created":
+			m.treeView.AddFile(msg.Event.Path, msg.Event.Size, msg.Event.ModTime)
+			m.notifications = append(m.notifications, Notification{
+				Type:      NotificationAdded,
+				Message:   "New: " + truncateFilename(msg.Event.Path, 30),
+				Expires:   now.Add(3 * time.Second),
+				CreatedAt: now,
+			})
+		case "deleted":
+			m.treeView.RemoveFile(msg.Event.Path)
+			m.notifications = append(m.notifications, Notification{
+				Type:      NotificationRemoved,
+				Message:   "Removed: " + truncateFilename(msg.Event.Path, 30),
+				Expires:   now.Add(3 * time.Second),
+				CreatedAt: now,
+			})
+		case "modified":
+			m.treeView.UpdateFile(msg.Event.Path, msg.Event.Size)
+			m.notifications = append(m.notifications, Notification{
+				Type:      NotificationModified,
+				Message:   "Modified: " + truncateFilename(msg.Event.Path, 30),
+				Expires:   now.Add(3 * time.Second),
+				CreatedAt: now,
+			})
+		}
+		return m, m.listenForTreeEvents()
+
 	case spinner.TickMsg:
 		if m.state == StateDeleting {
 			var cmd tea.Cmd
@@ -470,6 +581,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Tree mode key handling
+		if m.treeMode && m.treeView != nil {
+			switch key {
+			case "q", "esc":
+				return m, tea.Quit
+			case "L":
+				m.logViewer.Toggle()
+			case "up", "k":
+				m.treeView.MoveUp()
+			case "down", "j":
+				m.treeView.MoveDown()
+			case "enter", " ":
+				m.treeView.Toggle()
+			case "d":
+				// Delete selected files
+				if m.treeView.HasSelection() {
+					m.state = StateConfirm
+					m.confirmFocused = 0
+				}
+			case "c":
+				// Clear selection
+				m.treeView.ClearSelection()
+			case "t":
+				// Toggle tree view mode (switch to flat list)
+				m.treeMode = false
+			}
+			return m, nil
+		}
+
+		// Flat list mode key handling
 		switch key {
 		case "q", "esc":
 			return m, tea.Quit
@@ -479,6 +620,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.resultModel.HasSelection() {
 				m.state = StateConfirm
 				m.confirmFocused = 0 // Default to cancel
+			}
+		case "t":
+			// Toggle to tree view mode if available
+			if m.treeView != nil {
+				m.treeMode = true
 			}
 		default:
 			m.resultModel.HandleKey(key)
@@ -540,6 +686,30 @@ func (m Model) View() string {
 
 // renderResultsWithLogViewer renders the results view, optionally with the log viewer pane.
 func (m Model) renderResultsWithLogViewer() string {
+	// Tree mode rendering
+	if m.treeMode && m.treeView != nil {
+		if !m.logViewer.Open {
+			return m.renderTreeView()
+		}
+
+		// Calculate heights: log viewer takes bottom 1/3 of screen
+		logViewerHeight := m.height / 3
+		if logViewerHeight < 5 {
+			logViewerHeight = 5
+		}
+		resultsHeight := m.height - logViewerHeight
+
+		// Render tree view with reduced height
+		treeView := m.renderTreeViewWithHeight(resultsHeight)
+
+		// Render log viewer pane
+		logViewerView := m.renderLogViewerPane(logViewerHeight)
+
+		// Stack them vertically
+		return treeView + "\n" + logViewerView
+	}
+
+	// Flat list mode rendering
 	if !m.logViewer.Open {
 		return m.resultModel.ViewWithProgressAndNotifications(m.scanProgress, m.notifications, m.liveWatching, m.statusHint)
 	}
@@ -560,6 +730,76 @@ func (m Model) renderResultsWithLogViewer() string {
 
 	// Stack them vertically
 	return resultsView + "\n" + logViewerView
+}
+
+// renderTreeView renders the tree view at full height.
+func (m Model) renderTreeView() string {
+	return m.renderTreeViewWithHeight(m.height)
+}
+
+// renderTreeViewWithHeight renders the tree view at the specified height.
+func (m Model) renderTreeViewWithHeight(height int) string {
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	var b strings.Builder
+
+	// Title
+	b.WriteString(titleStyle.Render("  Tree View"))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+
+	// Calculate available height for tree content
+	// Reserve: title(1) + divider(1) + staging area(1 if shown) + help(2) + padding
+	stagingHeight := 0
+	if m.treeView.HasSelection() {
+		stagingHeight = 1
+	}
+	treeHeight := height - 6 - stagingHeight
+	if treeHeight < 5 {
+		treeHeight = 5
+	}
+
+	// Render tree
+	treeContent := m.treeView.View(contentWidth, treeHeight)
+	b.WriteString(treeContent)
+
+	// Render staging area if files are selected
+	if stagingHeight > 0 {
+		staging := m.treeView.RenderStagingArea(contentWidth)
+		b.WriteString(staging)
+		b.WriteString("\n")
+	}
+
+	// Help/status bar
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+	helpText := m.renderTreeHelpBar(contentWidth)
+	b.WriteString(helpText)
+
+	return outerBoxStyle.Width(m.width - 2).Render(b.String())
+}
+
+// renderTreeHelpBar renders the help bar for tree view mode.
+func (m Model) renderTreeHelpBar(width int) string {
+	var hints []string
+
+	hints = append(hints, keyStyle.Render("j/k")+" "+keyDescStyle.Render("navigate"))
+	hints = append(hints, keyStyle.Render("enter")+" "+keyDescStyle.Render("toggle"))
+	hints = append(hints, keyStyle.Render("space")+" "+keyDescStyle.Render("select"))
+
+	if m.treeView.HasSelection() {
+		hints = append(hints, keyStyle.Render("d")+" "+keyDescStyle.Render("delete"))
+		hints = append(hints, keyStyle.Render("c")+" "+keyDescStyle.Render("clear"))
+	}
+
+	hints = append(hints, keyStyle.Render("t")+" "+keyDescStyle.Render("flat view"))
+	hints = append(hints, keyStyle.Render("q")+" "+keyDescStyle.Render("quit"))
+
+	return "  " + strings.Join(hints, "  ")
 }
 
 // renderLogViewerPane renders the collapsible log viewer pane.
@@ -585,17 +825,31 @@ func (m Model) logViewerVisibleRows() int {
 
 // renderConfirmDialog renders the deletion confirmation dialog.
 func (m Model) renderConfirmDialog() string {
-	// Background is the results view
-	bg := m.resultModel.View()
+	// Background is the results view (or tree view)
+	var bg string
+	if m.treeMode && m.treeView != nil {
+		bg = m.renderTreeView()
+	} else {
+		bg = m.resultModel.View()
+	}
 
-	selectedCount := m.resultModel.SelectedCount()
-	selectedSize := m.resultModel.SelectedSize()
+	// Get selection count and size from the appropriate source
+	var selectedCount int
+	var selectedSize int64
+	if m.treeMode && m.treeView != nil {
+		selectedCount = m.treeView.SelectedCount()
+		selectedSize = m.treeView.SelectedSize()
+	} else {
+		selectedCount = m.resultModel.SelectedCount()
+		selectedSize = m.resultModel.SelectedSize()
+	}
 
 	var dialogContent strings.Builder
 
 	// Summary with clear formatting
 	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render("Delete "))
-	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true).Render(fmt.Sprintf("%d files", selectedCount)))
+	fileCountStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true)
+	dialogContent.WriteString(fileCountStyle.Render(fmt.Sprintf("%d files", selectedCount)))
 	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render(" ("))
 	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Bold(true).Render(types.FormatSize(selectedSize)))
 	dialogContent.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Render(")?"))
@@ -684,10 +938,11 @@ func (m Model) renderComplete() string {
 	deleted := m.deleteProgress - len(m.deleteErrors)
 	sizeStyle := lipgloss.NewStyle().Foreground(successColor)
 
+	freedSize := sizeStyle.Render(types.FormatSize(m.lastFreedSize))
 	if m.options.DryRun {
-		dialogContent.WriteString(fmt.Sprintf("Would free %s (%d files)", sizeStyle.Render(types.FormatSize(m.lastFreedSize)), m.deleteTotal))
+		dialogContent.WriteString(fmt.Sprintf("Would free %s (%d files)", freedSize, m.deleteTotal))
 	} else {
-		dialogContent.WriteString(fmt.Sprintf("Freed %s (%d files)", sizeStyle.Render(types.FormatSize(m.lastFreedSize)), deleted))
+		dialogContent.WriteString(fmt.Sprintf("Freed %s (%d files)", freedSize, deleted))
 	}
 
 	if len(m.deleteErrors) > 0 {
@@ -946,6 +1201,61 @@ func (m Model) listenForLiveEvents() tea.Cmd {
 	}
 }
 
+// startTreeWatch starts watching for tree events from the daemon.
+func (m Model) startTreeWatch() tea.Cmd {
+	ctx := m.ctx
+	root := m.options.Root
+	minSize := m.options.MinSize
+
+	// Resolve symlinks to match daemon's indexed paths
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
+	return func() tea.Msg {
+		// Check if daemon is running
+		pidPath := client.DefaultPIDPath()
+		if !client.IsDaemonRunning(pidPath) {
+			return TreeWatchErrorMsg{Err: errors.New("daemon not running")}
+		}
+
+		// Connect to daemon
+		socketPath := client.DefaultSocketPath()
+		daemonClient, err := client.ConnectWithContext(ctx, socketPath)
+		if err != nil {
+			return TreeWatchErrorMsg{Err: err}
+		}
+
+		// Start watching for tree events
+		eventChan, err := daemonClient.WatchTree(ctx, root, minSize)
+		if err != nil {
+			daemonClient.Close()
+			return TreeWatchErrorMsg{Err: err}
+		}
+
+		// Note: We don't close daemonClient here because the stream needs it to stay open.
+		// The connection will be closed when the context is cancelled.
+
+		return TreeWatchStartedMsg{EventChan: eventChan}
+	}
+}
+
+// listenForTreeEvents returns a command that waits for tree events.
+func (m Model) listenForTreeEvents() tea.Cmd {
+	eventChan := m.treeEventChan
+	return func() tea.Msg {
+		if eventChan == nil {
+			return nil
+		}
+		event, ok := <-eventChan
+		if !ok {
+			// Channel closed, watching stopped
+			return TreeWatchEndedMsg{}
+		}
+		return TreeEventMsg{Event: event}
+	}
+}
+
 // handleLiveFileEvent processes a live file event and updates the results.
 // Returns a notification if one should be shown.
 // If a filter is provided, new/modified files are only added if they pass the filter.
@@ -1054,12 +1364,29 @@ type deleteProgressMsg struct {
 // startDelete begins the deletion process.
 func (m Model) startDelete() (tea.Model, tea.Cmd) {
 	m.state = StateDeleting
-	m.deleteTotal = m.resultModel.SelectedCount()
 	m.deleteProgress = 0
 	m.deleteErrors = nil
-	m.lastFreedSize = m.resultModel.SelectedSize() // Track size being freed
 
-	files := m.resultModel.SelectedFiles()
+	// Get files from the appropriate source based on mode
+	var filePaths []string
+	if m.treeMode && m.treeView != nil {
+		m.deleteTotal = m.treeView.SelectedCount()
+		m.lastFreedSize = m.treeView.SelectedSize()
+		// Get paths from tree selection
+		selectedNodes := m.treeView.GetSelectedFiles()
+		for _, node := range selectedNodes {
+			filePaths = append(filePaths, node.Path)
+		}
+	} else {
+		m.deleteTotal = m.resultModel.SelectedCount()
+		m.lastFreedSize = m.resultModel.SelectedSize()
+		// Get paths from result model selection
+		files := m.resultModel.SelectedFiles()
+		for _, f := range files {
+			filePaths = append(filePaths, f.Path)
+		}
+	}
+
 	dryRun := m.options.DryRun
 
 	logging.Get("tui").Info("delete started",
@@ -1073,10 +1400,10 @@ func (m Model) startDelete() (tea.Model, tea.Cmd) {
 
 	// Start deletion in background
 	go func() {
-		for i, file := range files {
+		for i, path := range filePaths {
 			var err error
 			if !dryRun {
-				err = os.Remove(file.Path)
+				err = trash.MoveToTrash(path)
 			}
 
 			// Send progress update (non-blocking)
@@ -1089,7 +1416,7 @@ func (m Model) startDelete() (tea.Model, tea.Cmd) {
 
 		// Send final completion message
 		progressChan <- deleteProgressMsg{
-			current: len(files),
+			current: len(filePaths),
 			done:    true,
 		}
 		close(progressChan)
@@ -1115,9 +1442,6 @@ func (m Model) listenForDeleteProgress() tea.Cmd {
 
 // removeDeletedFiles removes successfully deleted files from the results.
 func (m *Model) removeDeletedFiles() {
-	// Get the files that were selected for deletion
-	files := m.resultModel.SelectedFiles()
-
 	// Build a set of paths that had errors (weren't deleted)
 	errorPaths := make(map[string]bool)
 	for _, errPath := range m.deleteErrors {
@@ -1127,12 +1451,31 @@ func (m *Model) removeDeletedFiles() {
 	// Calculate actual freed size (excluding errors)
 	var actualFreedSize int64
 	deletedCount := 0
-	for _, file := range files {
-		if !errorPaths[file.Path] && !m.options.DryRun {
-			actualFreedSize += file.Size
-			deletedCount++
-			m.resultModel.RemoveFile(file.Path)
+
+	if m.treeMode && m.treeView != nil {
+		// Tree mode: process tree selection
+		selectedNodes := m.treeView.GetSelectedFiles()
+		for _, node := range selectedNodes {
+			if !errorPaths[node.Path] && !m.options.DryRun {
+				actualFreedSize += node.Size
+				deletedCount++
+				// Remove the deleted file from the tree view
+				m.treeView.RemoveFile(node.Path)
+			}
 		}
+		// Selection is already cleared by RemoveFile, but ensure it's clean
+		m.treeView.ClearSelection()
+	} else {
+		// Flat list mode: process result model selection
+		files := m.resultModel.SelectedFiles()
+		for _, file := range files {
+			if !errorPaths[file.Path] && !m.options.DryRun {
+				actualFreedSize += file.Size
+				deletedCount++
+				m.resultModel.RemoveFile(file.Path)
+			}
+		}
+		m.resultModel.SelectNone()
 	}
 
 	logging.Get("tui").Info("delete completed",
@@ -1143,9 +1486,6 @@ func (m *Model) removeDeletedFiles() {
 	// Update the freed size (add to any previous freed size)
 	currentFreed := m.resultModel.LastFreedSize()
 	m.resultModel.SetLastFreedSize(currentFreed + actualFreedSize)
-
-	// Clear selection
-	m.resultModel.SelectNone()
 }
 
 // filePassesFilter checks if a file passes the configured filter.
@@ -1205,6 +1545,72 @@ func fromFilterFileInfo(fi filter.FileInfo) types.FileInfo {
 		Mode:    fi.Mode,
 		Owner:   fi.Owner,
 	}
+}
+
+// loadTree loads the tree view data from the daemon.
+func (m Model) loadTree() tea.Cmd {
+	ctx := m.ctx
+	root := m.options.Root
+	minSize := m.options.MinSize
+	exclude := m.options.Exclude
+
+	// Resolve symlinks to match daemon's indexed paths
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
+	return func() tea.Msg {
+		// Check if daemon is running
+		pidPath := client.DefaultPIDPath()
+		if !client.IsDaemonRunning(pidPath) {
+			return TreeErrorMsg{Err: errors.New("daemon not running")}
+		}
+
+		// Connect to daemon
+		socketPath := client.DefaultSocketPath()
+		daemonClient, err := client.ConnectWithContext(ctx, socketPath)
+		if err != nil {
+			return TreeErrorMsg{Err: err}
+		}
+		defer daemonClient.Close()
+
+		// Get tree data
+		treeData, err := daemonClient.GetTree(ctx, root, minSize, exclude)
+		if err != nil {
+			return TreeErrorMsg{Err: err}
+		}
+
+		return TreeLoadedMsg{Root: treeData}
+	}
+}
+
+// convertClientTreeToNode converts a client.TreeNode to a tree.Node recursively.
+func convertClientTreeToNode(clientNode *client.TreeNode) *tree.Node {
+	if clientNode == nil {
+		return nil
+	}
+
+	node := &tree.Node{
+		Path:           clientNode.Path,
+		Name:           clientNode.Name,
+		IsDir:          clientNode.IsDir,
+		Size:           clientNode.Size,
+		ModTime:        clientNode.ModTime,
+		FileType:       clientNode.FileType,
+		LargeFileSize:  clientNode.LargeFileSize,
+		LargeFileCount: clientNode.LargeFileCount,
+		Expanded:       clientNode.IsDir, // Directories start expanded
+	}
+
+	// Convert children recursively
+	for _, child := range clientNode.Children {
+		childNode := convertClientTreeToNode(child)
+		if childNode != nil {
+			node.AddChild(childNode)
+		}
+	}
+
+	return node
 }
 
 // Run starts the TUI application.

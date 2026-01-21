@@ -215,27 +215,15 @@ func (m ScanModel) renderStats(totalWidth int) string {
 	elapsed := time.Since(m.startTime)
 	elapsedVal := formatDuration(elapsed)
 
-	// Cache stats
-	cacheHits := m.progress.CacheHits
-	cacheMisses := m.progress.CacheMisses
-	var cacheVal string
-	if cacheHits+cacheMisses > 0 {
-		hitRate := float64(cacheHits) / float64(cacheHits+cacheMisses) * 100
-		cacheVal = fmt.Sprintf("%.0f%%", hitRate)
-	} else {
-		cacheVal = "-"
-	}
-
 	// Create stats boxes
 	dirsBox := m.renderStatBox("Dirs", dirsVal, boxWidth)
 	filesBox := m.renderStatBox("Files", filesVal, boxWidth)
 	largeBox := m.renderStatBox("Large", largeVal, boxWidth)
-	cacheBox := m.renderStatBox("Cache", cacheVal, boxWidth)
 	elapsedBox := m.renderStatBox("Time", elapsedVal, boxWidth)
 
 	// Join horizontally
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		"  ", dirsBox, " ", filesBox, " ", largeBox, " ", cacheBox, " ", elapsedBox)
+		"  ", dirsBox, " ", filesBox, " ", largeBox, " ", elapsedBox)
 }
 
 // renderStatBox renders a single stat box.

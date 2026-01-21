@@ -1,10 +1,8 @@
 // Package scanner provides high-performance parallel directory scanning
-// for the sweep disk analyzer. It uses fastwalk for maximum throughput
-// with optional metadata caching for near-instant repeat scans.
+// for the sweep disk analyzer. It uses fastwalk for maximum throughput.
 package scanner
 
 import (
-	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -38,10 +36,6 @@ type Options struct {
 	// It allows streaming results as files are found rather than waiting
 	// for the entire scan to complete. Must be safe for concurrent calls.
 	OnFile func(types.FileInfo)
-
-	// Cache is an optional cache for speeding up repeat scans.
-	// If nil, caching is disabled.
-	Cache *cache.Cache
 }
 
 // DefaultOptions returns options with sensible defaults for most systems.

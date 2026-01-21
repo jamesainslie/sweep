@@ -19,8 +19,6 @@ import (
 type ScanMetrics struct {
 	DirsScanned  int64
 	FilesScanned int64
-	CacheHits    int64
-	CacheMisses  int64
 	Elapsed      time.Duration
 }
 
@@ -248,16 +246,6 @@ func (m ResultModel) renderMetrics(_ int) string {
 		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
 			humanize.Comma(m.metrics.DirsScanned),
 			humanize.Comma(m.metrics.FilesScanned)))
-	}
-
-	// Cache stats
-	total := m.metrics.CacheHits + m.metrics.CacheMisses
-	if total > 0 {
-		hitRate := float64(m.metrics.CacheHits) / float64(total) * 100
-		parts = append(parts, fmt.Sprintf("Cache: %s hits, %s misses (%.0f%%)",
-			humanize.Comma(m.metrics.CacheHits),
-			humanize.Comma(m.metrics.CacheMisses),
-			hitRate))
 	}
 
 	// Elapsed time
@@ -903,27 +891,10 @@ func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress)
 			humanize.Comma(filesScanned)))
 	}
 
-	// Cache stats.
-	cacheHits := m.metrics.CacheHits
-	cacheMisses := m.metrics.CacheMisses
-	if progress.Scanning {
-		cacheHits = progress.CacheHits
-		cacheMisses = progress.CacheMisses
-	}
-
-	total := cacheHits + cacheMisses
-	if total > 0 {
-		hitRate := float64(cacheHits) / float64(total) * 100
-		parts = append(parts, fmt.Sprintf("Cache: %s hits, %s misses (%.0f%%)",
-			humanize.Comma(cacheHits),
-			humanize.Comma(cacheMisses),
-			hitRate))
-	}
-
 	// Elapsed time.
 	var elapsed time.Duration
 	if progress.Scanning {
-		// Use frozen time if walk completed (cache flush may still be ongoing)
+		// Use frozen time if walk completed
 		if progress.WalkCompleteElapsed > 0 {
 			elapsed = progress.WalkCompleteElapsed
 		} else {

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
 )
 
@@ -41,7 +40,7 @@ func createBenchTree(b *testing.B, numFiles int) string {
 	return root
 }
 
-func BenchmarkScanCold(b *testing.B) {
+func BenchmarkScan(b *testing.B) {
 	root := createBenchTree(b, 1000)
 	defer os.RemoveAll(root)
 
@@ -50,7 +49,6 @@ func BenchmarkScanCold(b *testing.B) {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
-			Cache:   nil, // No cache
 		})
 		if _, err := s.Scan(context.Background()); err != nil {
 			b.Fatalf("scan failed: %v", err)
@@ -58,46 +56,7 @@ func BenchmarkScanCold(b *testing.B) {
 	}
 }
 
-func BenchmarkScanWarm(b *testing.B) {
-	root := createBenchTree(b, 1000)
-	defer os.RemoveAll(root)
-
-	cacheDir, err := os.MkdirTemp("", "cache-bench-*")
-	if err != nil {
-		b.Fatalf("failed to create cache dir: %v", err)
-	}
-	defer os.RemoveAll(cacheDir)
-
-	c, err := cache.Open(filepath.Join(cacheDir, "cache"))
-	if err != nil {
-		b.Fatalf("failed to open cache: %v", err)
-	}
-	defer c.Close()
-
-	// Warm up cache with first scan
-	s := scanner.New(scanner.Options{
-		Root:    root,
-		MinSize: 1024,
-		Cache:   c,
-	})
-	if _, err := s.Scan(context.Background()); err != nil {
-		b.Fatalf("warmup scan failed: %v", err)
-	}
-
-	b.ResetTimer()
-	for b.Loop() {
-		s := scanner.New(scanner.Options{
-			Root:    root,
-			MinSize: 1024,
-			Cache:   c,
-		})
-		if _, err := s.Scan(context.Background()); err != nil {
-			b.Fatalf("scan failed: %v", err)
-		}
-	}
-}
-
-func BenchmarkScanCold_Large(b *testing.B) {
+func BenchmarkScan_Large(b *testing.B) {
 	root := createBenchTree(b, 5000)
 	defer os.RemoveAll(root)
 
@@ -106,46 +65,6 @@ func BenchmarkScanCold_Large(b *testing.B) {
 		s := scanner.New(scanner.Options{
 			Root:    root,
 			MinSize: 1024,
-			Cache:   nil,
-		})
-		if _, err := s.Scan(context.Background()); err != nil {
-			b.Fatalf("scan failed: %v", err)
-		}
-	}
-}
-
-func BenchmarkScanWarm_Large(b *testing.B) {
-	root := createBenchTree(b, 5000)
-	defer os.RemoveAll(root)
-
-	cacheDir, err := os.MkdirTemp("", "cache-bench-*")
-	if err != nil {
-		b.Fatalf("failed to create cache dir: %v", err)
-	}
-	defer os.RemoveAll(cacheDir)
-
-	c, err := cache.Open(filepath.Join(cacheDir, "cache"))
-	if err != nil {
-		b.Fatalf("failed to open cache: %v", err)
-	}
-	defer c.Close()
-
-	// Warm up cache
-	s := scanner.New(scanner.Options{
-		Root:    root,
-		MinSize: 1024,
-		Cache:   c,
-	})
-	if _, err := s.Scan(context.Background()); err != nil {
-		b.Fatalf("warmup scan failed: %v", err)
-	}
-
-	b.ResetTimer()
-	for b.Loop() {
-		s := scanner.New(scanner.Options{
-			Root:    root,
-			MinSize: 1024,
-			Cache:   c,
 		})
 		if _, err := s.Scan(context.Background()); err != nil {
 			b.Fatalf("scan failed: %v", err)

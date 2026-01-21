@@ -13,7 +13,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jamesainslie/sweep/pkg/client"
-	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/scanner"
@@ -39,7 +38,6 @@ type Options struct {
 	FileWorkers int
 	DryRun      bool
 	NoDaemon    bool
-	Cache       *cache.Cache
 	Filter      *filter.Filter // Optional filter for pre-filtering views
 }
 
@@ -47,8 +45,6 @@ type Options struct {
 type ScanProgress struct {
 	DirsScanned  int64
 	FilesScanned int64
-	CacheHits    int64
-	CacheMisses  int64
 	Scanning     bool
 	StartTime    time.Time
 	// WalkCompleteElapsed is the frozen elapsed time when directory traversal completes.
@@ -263,9 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ProgressMsg:
 		m.scanProgress.DirsScanned = msg.DirsScanned
 		m.scanProgress.FilesScanned = msg.FilesScanned
-		m.scanProgress.CacheHits = msg.CacheHits
-		m.scanProgress.CacheMisses = msg.CacheMisses
-		// Freeze elapsed time when walk completes (cache flush may continue)
+		// Freeze elapsed time when walk completes
 		if msg.WalkComplete && m.scanProgress.WalkCompleteElapsed == 0 {
 			m.scanProgress.WalkCompleteElapsed = time.Since(m.scanProgress.StartTime)
 		}
@@ -289,8 +283,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update progress
 		m.scanProgress.DirsScanned = msg.DirsScanned
 		m.scanProgress.FilesScanned = msg.FilesScanned
-		m.scanProgress.CacheHits = msg.FilesScanned
-		m.scanProgress.CacheMisses = 0
 		// Mark scan as done
 		m.scanDone = true
 		m.scanProgress.Scanning = false
@@ -298,8 +290,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultModel.metrics = ScanMetrics{
 			DirsScanned:  msg.DirsScanned,
 			FilesScanned: msg.FilesScanned,
-			CacheHits:    msg.FilesScanned,
-			CacheMisses:  0,
 			Elapsed:      elapsed,
 		}
 		logging.Get("tui").Info("scan completed via daemon",
@@ -320,8 +310,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultModel.metrics = ScanMetrics{
 			DirsScanned:  m.scanProgress.DirsScanned,
 			FilesScanned: m.scanProgress.FilesScanned,
-			CacheHits:    m.scanProgress.CacheHits,
-			CacheMisses:  m.scanProgress.CacheMisses,
 			Elapsed:      elapsed,
 		}
 		logging.Get("tui").Info("scan completed",
@@ -792,7 +780,6 @@ func (m Model) startStreamingScan() tea.Cmd {
 					// Channel full, skip this file (shouldn't happen)
 				}
 			},
-			Cache: m.options.Cache,
 		}
 
 		s := scanner.New(opts)

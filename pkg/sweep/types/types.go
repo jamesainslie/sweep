@@ -76,12 +76,6 @@ type ScanResult struct {
 
 	// Errors contains any errors encountered during scanning.
 	Errors []ScanError `json:"errors,omitempty"`
-
-	// CacheHits is the number of files retrieved from cache.
-	CacheHits int64 `json:"cache_hits"`
-
-	// CacheMisses is the number of files freshly scanned.
-	CacheMisses int64 `json:"cache_misses"`
 }
 
 // ScanError represents an error encountered during scanning.
@@ -133,14 +127,7 @@ type ScanProgress struct {
 	// BytesScanned is the total bytes of all files examined so far.
 	BytesScanned int64 `json:"bytes_scanned"`
 
-	// CacheHits is the number of files retrieved from cache.
-	CacheHits int64 `json:"cache_hits"`
-
-	// CacheMisses is the number of files not in cache (freshly scanned).
-	CacheMisses int64 `json:"cache_misses"`
-
 	// WalkComplete indicates that directory traversal is finished.
-	// When true, the scanner is in post-processing (cache flush) phase.
 	// The TUI uses this to freeze the displayed elapsed time.
 	WalkComplete bool `json:"walk_complete,omitempty"`
 }

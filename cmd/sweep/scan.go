@@ -12,10 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/jamesainslie/sweep/cmd/sweep/tui"
 	"github.com/jamesainslie/sweep/pkg/client"
-	"github.com/jamesainslie/sweep/pkg/sweep/cache"
 	"github.com/jamesainslie/sweep/pkg/sweep/config"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
 	"github.com/jamesainslie/sweep/pkg/sweep/output"
@@ -104,23 +102,6 @@ func runScan(_ *cobra.Command, args []string) error {
 	// Get exclusion patterns
 	exclude := viper.GetStringSlice("exclude")
 
-	// Initialize cache if not disabled
-	var c *cache.Cache
-	noCache := viper.GetBool("no_cache")
-	if !noCache {
-		cachePath := filepath.Join(xdg.CacheHome, "sweep", "metadata")
-		c, err = cache.Open(cachePath)
-		if err != nil {
-			// Log warning, continue without cache
-			printVerbose("Warning: cache unavailable: %v", err)
-		} else {
-			defer c.Close()
-			printVerbose("Using cache at %s", cachePath)
-		}
-	} else {
-		printVerbose("Cache disabled via --no-cache flag")
-	}
-
 	// Build scan options
 	opts := types.ScanOptions{
 		Root:        absPath,
@@ -141,15 +122,15 @@ func runScan(_ *cobra.Command, args []string) error {
 
 	// Run scan
 	if noInteractive {
-		return runNonInteractiveScan(opts, c)
+		return runNonInteractiveScan(opts)
 	}
 
 	// Interactive TUI mode
-	return runInteractiveTUI(opts, c)
+	return runInteractiveTUI(opts)
 }
 
 // runInteractiveTUI runs the TUI application.
-func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
+func runInteractiveTUI(opts types.ScanOptions) error {
 	dryRun := viper.GetBool("dry_run")
 	noDaemon := viper.GetBool("no_daemon")
 
@@ -172,7 +153,6 @@ func runInteractiveTUI(opts types.ScanOptions, c *cache.Cache) error {
 		FileWorkers: opts.FileWorkers,
 		DryRun:      dryRun,
 		NoDaemon:    noDaemon,
-		Cache:       c,
 		Filter:      f,
 	}
 
@@ -186,8 +166,6 @@ type scanResult struct {
 	FilesScanned int64            `json:"files_scanned"`
 	TotalSize    int64            `json:"total_size"`
 	Elapsed      time.Duration    `json:"elapsed"`
-	CacheHits    int64            `json:"cache_hits"`
-	CacheMisses  int64            `json:"cache_misses"`
 	Errors       []scanError      `json:"errors,omitempty"`
 }
 
@@ -197,7 +175,7 @@ type scanError struct {
 }
 
 // runNonInteractiveScan runs the scan in non-interactive mode.
-func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache) error {
+func runNonInteractiveScan(opts types.ScanOptions) error {
 	// Build filter from CLI flags
 	f, err := buildFilter()
 	if err != nil {
@@ -272,7 +250,7 @@ func runNonInteractiveScan(opts types.ScanOptions, c *cache.Cache) error {
 		}
 
 		// Run the scan using the fast scanner
-		internalResult, err = performScan(ctx, opts, c)
+		internalResult, err = performScan(ctx, opts)
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				printInfo("Scan cancelled")
@@ -423,7 +401,7 @@ func triggerBackgroundIndexing(path string) {
 }
 
 // performScan executes the directory scan with the given options using the fast scanner.
-func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*scanResult, error) {
+func performScan(ctx context.Context, opts types.ScanOptions) (*scanResult, error) {
 	// Create scanner with fastwalk-based implementation
 	s := scanner.New(scanner.Options{
 		Root:        opts.Root,
@@ -431,7 +409,6 @@ func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*
 		Exclude:     opts.Exclude,
 		DirWorkers:  opts.DirWorkers,
 		FileWorkers: opts.FileWorkers,
-		Cache:       c,
 	})
 
 	// Run the scan
@@ -446,8 +423,6 @@ func performScan(ctx context.Context, opts types.ScanOptions, c *cache.Cache) (*
 		DirsScanned:  scanRes.DirsScanned,
 		FilesScanned: scanRes.FilesScanned,
 		TotalSize:    scanRes.TotalSize,
-		CacheHits:    scanRes.CacheHits,
-		CacheMisses:  scanRes.CacheMisses,
 		Errors:       make([]scanError, len(scanRes.Errors)),
 	}
 

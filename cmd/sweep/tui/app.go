@@ -449,6 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Convert client tree to internal tree representation
 		treeRoot := convertClientTreeToNode(msg.Root)
 		if treeRoot != nil {
+			treeRoot.Expanded = true // Expand only the root node
 			m.treeView = NewTreeView(treeRoot)
 			m.treeMode = true
 			logging.Get("tui").Info("tree view loaded",
@@ -1625,7 +1626,7 @@ func convertClientTreeToNode(clientNode *client.TreeNode) *tree.Node {
 		FileType:       clientNode.FileType,
 		LargeFileSize:  clientNode.LargeFileSize,
 		LargeFileCount: clientNode.LargeFileCount,
-		Expanded:       clientNode.IsDir, // Directories start expanded
+		Expanded:       false, // Directories start collapsed
 	}
 
 	// Convert children recursively

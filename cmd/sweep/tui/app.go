@@ -451,7 +451,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if treeRoot != nil {
 			treeRoot.Expanded = true // Expand only the root node
 			m.treeView = NewTreeView(treeRoot)
-			m.treeMode = true
+			// Keep treeMode = false, list view is default (press 't' for tree)
 			logging.Get("tui").Info("tree view loaded",
 				"nodes", len(m.treeView.flat),
 				"largeFileSize", types.FormatSize(treeRoot.LargeFileSize))

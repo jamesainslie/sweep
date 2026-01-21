@@ -450,3 +450,81 @@ func (s *Store) GetIndexedPaths() ([]string, error) {
 
 	return paths, err
 }
+
+// AddIndexedPathWithSubsumption adds a path and removes any child paths it subsumes.
+// Returns the list of subsumed paths that were removed.
+func (s *Store) AddIndexedPathWithSubsumption(path string) ([]string, error) {
+	cleanPath := filepath.Clean(path)
+	var subsumed []string
+
+	// Get all currently indexed paths
+	existingPaths, err := s.GetIndexedPaths()
+	if err != nil {
+		return nil, err
+	}
+
+	// Find paths that are children of the new path
+	for _, existing := range existingPaths {
+		cleanExisting := filepath.Clean(existing)
+		// Skip exact matches (not a child)
+		if cleanExisting == cleanPath {
+			continue
+		}
+		// Check if existing is a child of the new path
+		if isChildPath(cleanExisting, cleanPath) {
+			subsumed = append(subsumed, existing)
+		}
+	}
+
+	// Remove all subsumed paths
+	for _, p := range subsumed {
+		if err := s.RemoveIndexedPath(p); err != nil {
+			return nil, err
+		}
+	}
+
+	// Add the new path
+	if err := s.AddIndexedPath(cleanPath); err != nil {
+		return nil, err
+	}
+
+	return subsumed, nil
+}
+
+// IsPathCovered checks if a path is already covered by an indexed path.
+// Returns true and the covering path if the path is under an already-indexed path.
+func (s *Store) IsPathCovered(path string) (bool, string) {
+	cleanPath := filepath.Clean(path)
+
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		return false, ""
+	}
+
+	for _, indexed := range paths {
+		cleanIndexed := filepath.Clean(indexed)
+		// Check if path is the same as or a child of an indexed path
+		if cleanPath == cleanIndexed || isChildPath(cleanPath, cleanIndexed) {
+			return true, indexed
+		}
+	}
+
+	return false, ""
+}
+
+// isChildPath checks if child is a path under parent.
+// Returns true only if child is strictly under parent (not equal to parent).
+// Uses filepath.Separator for cross-platform compatibility.
+func isChildPath(child, parent string) bool {
+	// Ensure both paths are clean
+	cleanChild := filepath.Clean(child)
+	cleanParent := filepath.Clean(parent)
+
+	// Child must be longer than parent
+	if len(cleanChild) <= len(cleanParent) {
+		return false
+	}
+
+	// Child must start with parent + separator
+	return strings.HasPrefix(cleanChild, cleanParent+string(filepath.Separator))
+}

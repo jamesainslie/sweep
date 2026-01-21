@@ -455,3 +455,282 @@ func TestIndexedPaths(t *testing.T) {
 		t.Fatalf("RemoveIndexedPath (non-existent) failed: %v", err)
 	}
 }
+
+func TestPathSubsumption(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Add child paths first
+	childPaths := []string{
+		"/Users/james/Downloads",
+		"/Users/james/Desktop",
+		"/Users/james/Documents/work",
+	}
+
+	for _, p := range childPaths {
+		if err := s.AddIndexedPath(p); err != nil {
+			t.Fatalf("AddIndexedPath(%q) failed: %v", p, err)
+		}
+	}
+
+	// Verify child paths exist
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	if len(paths) != 3 {
+		t.Errorf("Expected 3 indexed paths, got %d", len(paths))
+	}
+
+	// Add parent path with subsumption - should remove all children
+	subsumed, err := s.AddIndexedPathWithSubsumption("/Users/james")
+	if err != nil {
+		t.Fatalf("AddIndexedPathWithSubsumption failed: %v", err)
+	}
+
+	// Verify subsumed paths are returned
+	if len(subsumed) != 3 {
+		t.Errorf("Expected 3 subsumed paths, got %d: %v", len(subsumed), subsumed)
+	}
+
+	// Verify subsumed paths contain expected values
+	subsumedSet := make(map[string]bool)
+	for _, p := range subsumed {
+		subsumedSet[p] = true
+	}
+	for _, expected := range childPaths {
+		if !subsumedSet[expected] {
+			t.Errorf("Expected %q to be in subsumed paths", expected)
+		}
+	}
+
+	// Verify only parent remains in indexed paths
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths after subsumption failed: %v", err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("Expected 1 indexed path after subsumption, got %d: %v", len(paths), paths)
+	}
+	if len(paths) > 0 && paths[0] != "/Users/james" {
+		t.Errorf("Expected /Users/james to be the only indexed path, got %q", paths[0])
+	}
+
+	// Test adding a path that has no children to subsume
+	subsumed, err = s.AddIndexedPathWithSubsumption("/var/log")
+	if err != nil {
+		t.Fatalf("AddIndexedPathWithSubsumption(/var/log) failed: %v", err)
+	}
+	if len(subsumed) != 0 {
+		t.Errorf("Expected 0 subsumed paths for /var/log, got %d", len(subsumed))
+	}
+
+	// Verify both paths now exist
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Errorf("Expected 2 indexed paths, got %d", len(paths))
+	}
+}
+
+func TestPathSubsumption_EdgeCases(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Test: Adding path that is already indexed (should not error, no subsumption)
+	if err := s.AddIndexedPath("/Users/james"); err != nil {
+		t.Fatalf("AddIndexedPath failed: %v", err)
+	}
+	subsumed, err := s.AddIndexedPathWithSubsumption("/Users/james")
+	if err != nil {
+		t.Fatalf("AddIndexedPathWithSubsumption (same path) failed: %v", err)
+	}
+	if len(subsumed) != 0 {
+		t.Errorf("Expected 0 subsumed paths when adding same path, got %d", len(subsumed))
+	}
+
+	// Test: Sibling paths should not be subsumed
+	// Add /Users/alice, then add /Users/james (should not subsume /Users/alice)
+	if err := s.AddIndexedPath("/Users/alice"); err != nil {
+		t.Fatalf("AddIndexedPath(/Users/alice) failed: %v", err)
+	}
+	subsumed, err = s.AddIndexedPathWithSubsumption("/Users/james")
+	if err != nil {
+		t.Fatalf("AddIndexedPathWithSubsumption failed: %v", err)
+	}
+	if len(subsumed) != 0 {
+		t.Errorf("Expected 0 subsumed paths (sibling), got %d: %v", len(subsumed), subsumed)
+	}
+
+	// Verify both paths exist
+	paths, err := s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	pathSet := make(map[string]bool)
+	for _, p := range paths {
+		pathSet[p] = true
+	}
+	if !pathSet["/Users/alice"] {
+		t.Error("Expected /Users/alice to still exist")
+	}
+	if !pathSet["/Users/james"] {
+		t.Error("Expected /Users/james to exist")
+	}
+
+	// Test: Path that looks like child but isn't (e.g., /Users/jamesbond vs /Users/james)
+	// This tests proper path boundary handling
+	if err := s.AddIndexedPath("/Users/jamesbond"); err != nil {
+		t.Fatalf("AddIndexedPath(/Users/jamesbond) failed: %v", err)
+	}
+	subsumed, err = s.AddIndexedPathWithSubsumption("/Users/james")
+	if err != nil {
+		t.Fatalf("AddIndexedPathWithSubsumption failed: %v", err)
+	}
+	// /Users/jamesbond should NOT be subsumed by /Users/james
+	for _, p := range subsumed {
+		if p == "/Users/jamesbond" {
+			t.Error("/Users/jamesbond should NOT be subsumed by /Users/james")
+		}
+	}
+
+	// Verify /Users/jamesbond still exists
+	paths, err = s.GetIndexedPaths()
+	if err != nil {
+		t.Fatalf("GetIndexedPaths failed: %v", err)
+	}
+	pathSet = make(map[string]bool)
+	for _, p := range paths {
+		pathSet[p] = true
+	}
+	if !pathSet["/Users/jamesbond"] {
+		t.Error("Expected /Users/jamesbond to still exist (not a child)")
+	}
+}
+
+func TestIsPathCovered(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Add /Users/james as indexed
+	if err := s.AddIndexedPath("/Users/james"); err != nil {
+		t.Fatalf("AddIndexedPath failed: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		path             string
+		expectCovered    bool
+		expectCoveringBy string
+	}{
+		{
+			name:             "child path is covered",
+			path:             "/Users/james/Downloads",
+			expectCovered:    true,
+			expectCoveringBy: "/Users/james",
+		},
+		{
+			name:             "nested child path is covered",
+			path:             "/Users/james/Documents/work/projects",
+			expectCovered:    true,
+			expectCoveringBy: "/Users/james",
+		},
+		{
+			name:             "exact match is covered",
+			path:             "/Users/james",
+			expectCovered:    true,
+			expectCoveringBy: "/Users/james",
+		},
+		{
+			name:             "unrelated path is not covered",
+			path:             "/var/log",
+			expectCovered:    false,
+			expectCoveringBy: "",
+		},
+		{
+			name:             "parent path is not covered",
+			path:             "/Users",
+			expectCovered:    false,
+			expectCoveringBy: "",
+		},
+		{
+			name:             "sibling path is not covered",
+			path:             "/Users/alice",
+			expectCovered:    false,
+			expectCoveringBy: "",
+		},
+		{
+			name:             "similar prefix but not child is not covered",
+			path:             "/Users/jamesbond",
+			expectCovered:    false,
+			expectCoveringBy: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			covered, coveringPath := s.IsPathCovered(tt.path)
+			if covered != tt.expectCovered {
+				t.Errorf("IsPathCovered(%q) = %v, want %v", tt.path, covered, tt.expectCovered)
+			}
+			if coveringPath != tt.expectCoveringBy {
+				t.Errorf("IsPathCovered(%q) coveringPath = %q, want %q", tt.path, coveringPath, tt.expectCoveringBy)
+			}
+		})
+	}
+}
+
+func TestIsPathCovered_MultipleIndexedPaths(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	// Add multiple indexed paths
+	indexedPaths := []string{
+		"/Users/james/projects",
+		"/var/log",
+		"/opt/data",
+	}
+
+	for _, p := range indexedPaths {
+		if err := s.AddIndexedPath(p); err != nil {
+			t.Fatalf("AddIndexedPath(%q) failed: %v", p, err)
+		}
+	}
+
+	// Test coverage with multiple indexed paths
+	tests := []struct {
+		path             string
+		expectCovered    bool
+		expectCoveringBy string
+	}{
+		{"/Users/james/projects/sweep", true, "/Users/james/projects"},
+		{"/var/log/system.log", true, "/var/log"},
+		{"/opt/data/cache", true, "/opt/data"},
+		{"/Users/james/documents", false, ""},
+		{"/etc/config", false, ""},
+	}
+
+	for _, tt := range tests {
+		covered, coveringPath := s.IsPathCovered(tt.path)
+		if covered != tt.expectCovered {
+			t.Errorf("IsPathCovered(%q) = %v, want %v", tt.path, covered, tt.expectCovered)
+		}
+		if coveringPath != tt.expectCoveringBy {
+			t.Errorf("IsPathCovered(%q) coveringPath = %q, want %q", tt.path, coveringPath, tt.expectCoveringBy)
+		}
+	}
+}

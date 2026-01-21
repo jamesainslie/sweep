@@ -20,8 +20,8 @@ func TestMigrateFromV1ToV2(t *testing.T) {
 		{Path: "/root", Size: 0, IsDir: true},
 		{Path: "/root/small.txt", Size: 100, ModTime: 1000, IsDir: false},
 		{Path: "/root/medium.txt", Size: 5000, ModTime: 2000, IsDir: false},
-		{Path: "/root/large.bin", Size: 15000000, ModTime: 3000, IsDir: false},  // 15 MB
-		{Path: "/root/huge.bin", Size: 50000000, ModTime: 4000, IsDir: false},   // 50 MB
+		{Path: "/root/large.bin", Size: 15000000, ModTime: 3000, IsDir: false}, // 15 MB
+		{Path: "/root/huge.bin", Size: 50000000, ModTime: 4000, IsDir: false},  // 50 MB
 	}
 
 	for _, e := range entries {
@@ -38,7 +38,7 @@ func TestMigrateFromV1ToV2(t *testing.T) {
 	// Run migration with 10 MB threshold
 	threshold := int64(10 * 1024 * 1024)
 	var progressCalls int
-	onProgress := func(p store.MigrationProgress) {
+	onProgress := func(_ store.MigrationProgress) {
 		progressCalls++
 	}
 

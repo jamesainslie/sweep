@@ -11,7 +11,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
-// Key prefixes for different data types
+// Key prefixes for different data types.
 const (
 	prefixEntry       = "e:" // Regular file/dir entries
 	prefixLargeFile   = "l:" // Large files index (for fast queries)
@@ -225,7 +225,7 @@ func (s *Store) RebuildLargeFilesIndex(root string, minSize int64) (int, error) 
 			err := it.Item().Value(func(val []byte) error {
 				var entry Entry
 				if err := json.Unmarshal(val, &entry); err != nil {
-					return nil // Skip invalid entries
+					return nil //nolint:nilerr // intentionally skip malformed entries
 				}
 				if !entry.IsDir && entry.Size >= minSize {
 					largeFiles = append(largeFiles, &entry)

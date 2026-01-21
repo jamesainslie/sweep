@@ -8,8 +8,8 @@ import (
 )
 
 // Schema versions:
-// 1 - Initial version (entries only)
-// 2 - Added large files index (l:) and metadata (m:)
+// 1 - Initial version (entries only).
+// 2 - Added large files index (l:) and metadata (m:).
 const CurrentSchemaVersion = 2
 
 const schemaKey = "m:__schema__"

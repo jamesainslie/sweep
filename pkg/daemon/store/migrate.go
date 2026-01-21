@@ -47,8 +47,7 @@ func (s *Store) Migrate(ctx context.Context, largeFileThreshold int64, onProgres
 		}
 
 		var err error
-		switch version {
-		case 2:
+		if version == 2 {
 			err = s.migrateToV2(ctx, largeFileThreshold, onProgress)
 		}
 

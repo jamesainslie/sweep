@@ -168,3 +168,287 @@ func TestTreeNode(t *testing.T) {
 		assert.True(t, node.Selected)
 	})
 }
+
+func TestFlatten(t *testing.T) {
+	t.Run("flattens tree respecting expand/collapse state", func(t *testing.T) {
+		// Build tree:
+		//   root (expanded)
+		//     child1 (expanded)
+		//       file1
+		//     child2 (collapsed)
+		//       file2
+		root := &tree.Node{
+			Path:     "/project",
+			Name:     "project",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		child1 := &tree.Node{
+			Path:     "/project/child1",
+			Name:     "child1",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		file1 := &tree.Node{
+			Path:  "/project/child1/file1.go",
+			Name:  "file1.go",
+			IsDir: false,
+		}
+
+		child2 := &tree.Node{
+			Path:     "/project/child2",
+			Name:     "child2",
+			IsDir:    true,
+			Expanded: false, // collapsed
+		}
+
+		file2 := &tree.Node{
+			Path:  "/project/child2/file2.go",
+			Name:  "file2.go",
+			IsDir: false,
+		}
+
+		root.AddChild(child1)
+		child1.AddChild(file1)
+		root.AddChild(child2)
+		child2.AddChild(file2)
+
+		result := root.Flatten()
+
+		// Expected: [root, child1, file1, child2] - NOT file2 since child2 is collapsed
+		require.Len(t, result, 4)
+		assert.Same(t, root, result[0])
+		assert.Same(t, child1, result[1])
+		assert.Same(t, file1, result[2])
+		assert.Same(t, child2, result[3])
+	})
+
+	t.Run("flattens fully expanded tree", func(t *testing.T) {
+		root := &tree.Node{
+			Path:     "/project",
+			Name:     "project",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		child := &tree.Node{
+			Path:     "/project/child",
+			Name:     "child",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		file := &tree.Node{
+			Path:  "/project/child/file.go",
+			Name:  "file.go",
+			IsDir: false,
+		}
+
+		root.AddChild(child)
+		child.AddChild(file)
+
+		result := root.Flatten()
+
+		require.Len(t, result, 3)
+		assert.Same(t, root, result[0])
+		assert.Same(t, child, result[1])
+		assert.Same(t, file, result[2])
+	})
+
+	t.Run("flattens collapsed root returns only root", func(t *testing.T) {
+		root := &tree.Node{
+			Path:     "/project",
+			Name:     "project",
+			IsDir:    true,
+			Expanded: false, // collapsed
+		}
+
+		child := &tree.Node{
+			Path:  "/project/child",
+			Name:  "child",
+			IsDir: true,
+		}
+
+		root.AddChild(child)
+
+		result := root.Flatten()
+
+		require.Len(t, result, 1)
+		assert.Same(t, root, result[0])
+	})
+
+	t.Run("flattens single file node", func(t *testing.T) {
+		file := &tree.Node{
+			Path:  "/project/file.go",
+			Name:  "file.go",
+			IsDir: false,
+		}
+
+		result := file.Flatten()
+
+		require.Len(t, result, 1)
+		assert.Same(t, file, result[0])
+	})
+}
+
+func TestToggle(t *testing.T) {
+	t.Run("toggle expands collapsed directory", func(t *testing.T) {
+		dir := &tree.Node{
+			Path:     "/project/src",
+			Name:     "src",
+			IsDir:    true,
+			Expanded: false,
+		}
+
+		dir.Toggle()
+
+		assert.True(t, dir.Expanded)
+	})
+
+	t.Run("toggle collapses expanded directory", func(t *testing.T) {
+		dir := &tree.Node{
+			Path:     "/project/src",
+			Name:     "src",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		dir.Toggle()
+
+		assert.False(t, dir.Expanded)
+	})
+
+	t.Run("toggle on file is no-op", func(t *testing.T) {
+		file := &tree.Node{
+			Path:     "/project/file.go",
+			Name:     "file.go",
+			IsDir:    false,
+			Expanded: false,
+		}
+
+		file.Toggle()
+
+		// Files cannot be expanded
+		assert.False(t, file.Expanded)
+	})
+}
+
+func TestExpandCollapseAll(t *testing.T) {
+	t.Run("ExpandAll expands all directory descendants", func(t *testing.T) {
+		// Build nested tree
+		root := &tree.Node{
+			Path:     "/project",
+			Name:     "project",
+			IsDir:    true,
+			Expanded: false,
+		}
+
+		child1 := &tree.Node{
+			Path:     "/project/child1",
+			Name:     "child1",
+			IsDir:    true,
+			Expanded: false,
+		}
+
+		child2 := &tree.Node{
+			Path:     "/project/child2",
+			Name:     "child2",
+			IsDir:    true,
+			Expanded: false,
+		}
+
+		grandchild := &tree.Node{
+			Path:     "/project/child1/grandchild",
+			Name:     "grandchild",
+			IsDir:    true,
+			Expanded: false,
+		}
+
+		file := &tree.Node{
+			Path:  "/project/child1/file.go",
+			Name:  "file.go",
+			IsDir: false,
+		}
+
+		root.AddChild(child1)
+		root.AddChild(child2)
+		child1.AddChild(grandchild)
+		child1.AddChild(file)
+
+		root.ExpandAll()
+
+		assert.True(t, root.Expanded, "root should be expanded")
+		assert.True(t, child1.Expanded, "child1 should be expanded")
+		assert.True(t, child2.Expanded, "child2 should be expanded")
+		assert.True(t, grandchild.Expanded, "grandchild should be expanded")
+		// Files don't have Expanded state that matters
+	})
+
+	t.Run("CollapseAll collapses all directory descendants", func(t *testing.T) {
+		// Build nested tree with all expanded
+		root := &tree.Node{
+			Path:     "/project",
+			Name:     "project",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		child1 := &tree.Node{
+			Path:     "/project/child1",
+			Name:     "child1",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		child2 := &tree.Node{
+			Path:     "/project/child2",
+			Name:     "child2",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		grandchild := &tree.Node{
+			Path:     "/project/child1/grandchild",
+			Name:     "grandchild",
+			IsDir:    true,
+			Expanded: true,
+		}
+
+		root.AddChild(child1)
+		root.AddChild(child2)
+		child1.AddChild(grandchild)
+
+		root.CollapseAll()
+
+		assert.False(t, root.Expanded, "root should be collapsed")
+		assert.False(t, child1.Expanded, "child1 should be collapsed")
+		assert.False(t, child2.Expanded, "child2 should be collapsed")
+		assert.False(t, grandchild.Expanded, "grandchild should be collapsed")
+	})
+
+	t.Run("ExpandAll on file is no-op", func(t *testing.T) {
+		file := &tree.Node{
+			Path:  "/project/file.go",
+			Name:  "file.go",
+			IsDir: false,
+		}
+
+		// Should not panic
+		file.ExpandAll()
+		assert.False(t, file.Expanded)
+	})
+
+	t.Run("CollapseAll on file is no-op", func(_ *testing.T) {
+		file := &tree.Node{
+			Path:     "/project/file.go",
+			Name:     "file.go",
+			IsDir:    false,
+			Expanded: true, // technically invalid state but shouldn't matter
+		}
+
+		file.CollapseAll()
+		// For files, we just don't set it to true
+	})
+}

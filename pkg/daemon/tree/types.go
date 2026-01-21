@@ -49,3 +49,49 @@ func (n *Node) Depth() int {
 	}
 	return depth
 }
+
+// Flatten returns a slice of all visible nodes in display order.
+// Collapsed directories hide their children.
+func (n *Node) Flatten() []*Node {
+	result := []*Node{n}
+
+	// Only recurse into children if this is an expanded directory
+	if n.IsDir && n.Expanded {
+		for _, child := range n.Children {
+			result = append(result, child.Flatten()...)
+		}
+	}
+
+	return result
+}
+
+// Toggle expands or collapses a directory node.
+// Has no effect on file nodes.
+func (n *Node) Toggle() {
+	if !n.IsDir {
+		return
+	}
+	n.Expanded = !n.Expanded
+}
+
+// ExpandAll expands this node and all descendants.
+// Only affects directory nodes.
+func (n *Node) ExpandAll() {
+	if n.IsDir {
+		n.Expanded = true
+		for _, child := range n.Children {
+			child.ExpandAll()
+		}
+	}
+}
+
+// CollapseAll collapses this node and all descendants.
+// Only affects directory nodes.
+func (n *Node) CollapseAll() {
+	if n.IsDir {
+		n.Expanded = false
+		for _, child := range n.Children {
+			child.CollapseAll()
+		}
+	}
+}

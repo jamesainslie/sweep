@@ -423,6 +423,11 @@ func (s *Scanner) addChildToParent(fullPath string) {
 		return
 	}
 
+	// Skip the root directory - it has no parent within the scan tree.
+	if fullPath == s.root {
+		return
+	}
+
 	// Calculate relative path of parent.
 	parentPath := filepath.Dir(fullPath)
 	parentRelPath := ""

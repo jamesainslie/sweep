@@ -1,4 +1,6 @@
 .worktrees/
 bin/
 /sweep
+/sweepd
 .claude/
+.beads/daemon-error

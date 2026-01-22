@@ -753,6 +753,9 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 
 	var b strings.Builder
 
+	// Add top margin for visual spacing (matching list view)
+	b.WriteString("\n")
+
 	// Header - same style as flat list view
 	b.WriteString(m.renderTreeHeader(contentWidth))
 	b.WriteString("\n")
@@ -780,7 +783,7 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	b.WriteString("\n")
 
 	// Calculate available height for tree content
-	// Reserve: title(1) + metrics(1) + divider(1) + hints(1) + divider(1) + headers(1) + divider(1) + staging(1 if shown) + divider(1) + footer(1)
+	// Reserve: margin(1) + title(1) + metrics(1) + divider(1) + hints(1) + divider(1) + headers(1) + divider(1) + staging(1 if shown) + divider(1) + footer(1)
 	stagingHeight := 0
 	if m.treeView.HasSelection() {
 		stagingHeight = 1
@@ -789,7 +792,7 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	if m.renderTreeMetrics() != "" {
 		metricsHeight = 1
 	}
-	treeHeight := height - 10 - stagingHeight - metricsHeight
+	treeHeight := height - 11 - stagingHeight - metricsHeight
 	if treeHeight < 5 {
 		treeHeight = 5
 	}

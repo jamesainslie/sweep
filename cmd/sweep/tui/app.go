@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dustin/go-humanize"
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/daemon/tree"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
@@ -750,16 +751,28 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	// Header - same style as flat list view
 	b.WriteString(m.renderTreeHeader(contentWidth))
 	b.WriteString("\n")
+
+	// Metrics line (if available)
+	metricsLine := m.renderTreeMetrics()
+	if metricsLine != "" {
+		b.WriteString(metricsLine)
+		b.WriteString("\n")
+	}
+
 	b.WriteString(renderDivider(contentWidth))
 	b.WriteString("\n")
 
 	// Calculate available height for tree content
-	// Reserve: title(1) + divider(1) + staging area(1 if shown) + help(2) + padding
+	// Reserve: title(1) + metrics(1) + divider(1) + staging area(1 if shown) + help(2) + padding
 	stagingHeight := 0
 	if m.treeView.HasSelection() {
 		stagingHeight = 1
 	}
-	treeHeight := height - 6 - stagingHeight
+	metricsHeight := 0
+	if m.renderTreeMetrics() != "" {
+		metricsHeight = 1
+	}
+	treeHeight := height - 6 - stagingHeight - metricsHeight
 	if treeHeight < 5 {
 		treeHeight = 5
 	}
@@ -815,6 +828,35 @@ func (m Model) renderTreeHeader(_ int) string {
 	}
 
 	return header
+}
+
+// renderTreeMetrics renders the scan metrics line for tree view mode.
+func (m Model) renderTreeMetrics() string {
+	var parts []string
+
+	// Dirs and files scanned
+	if m.scanProgress.DirsScanned > 0 || m.scanProgress.FilesScanned > 0 {
+		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
+			humanize.Comma(m.scanProgress.DirsScanned),
+			humanize.Comma(m.scanProgress.FilesScanned)))
+	}
+
+	// Elapsed time
+	var elapsed time.Duration
+	if m.scanProgress.WalkCompleteElapsed > 0 {
+		elapsed = m.scanProgress.WalkCompleteElapsed
+	} else if !m.scanProgress.StartTime.IsZero() {
+		elapsed = time.Since(m.scanProgress.StartTime)
+	}
+	if elapsed > 0 {
+		parts = append(parts, fmt.Sprintf("Time: %v", elapsed.Round(time.Millisecond)))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
 }
 
 // renderTreeHelpBar renders the help bar for tree view mode.

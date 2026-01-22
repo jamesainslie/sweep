@@ -67,8 +67,18 @@ func Check() error {
 }
 
 // TestCoverage runs tests with race detection and generates coverage output.
+// Uses gotestsum if available, otherwise falls back to standard go test.
 func TestCoverage() error {
-	return sh.RunV("go", "tool", "gotestsum", "-f", "pkgname-and-test-fails", "--", "./...", "-race", "-coverprofile=coverage.out", "-covermode=atomic")
+	// Check if gotestsum is available as a go tool
+	if err := sh.Run("go", "tool", "gotestsum", "--version"); err == nil {
+		return sh.RunV("go", "tool", "gotestsum", "-f", "pkgname-and-test-fails", "--", "./...", "-race", "-coverprofile=coverage.out", "-covermode=atomic")
+	}
+
+	// Fallback to standard go test
+	if st.Verbose() {
+		fmt.Println("gotestsum not available, using go test")
+	}
+	return sh.RunV("go", "test", "-race", "-coverprofile=coverage.out", "-covermode=atomic", "./...")
 }
 
 // Build compiles both sweep and sweepd binaries.

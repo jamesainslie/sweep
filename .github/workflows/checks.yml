@@ -41,7 +41,7 @@ jobs:
           cache: true
 
       - name: Run tests
-        run: go tool gotestsum -f pkgname-and-test-fails -- ./... -race -coverprofile=coverage.out -covermode=atomic
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

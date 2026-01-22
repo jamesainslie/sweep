@@ -273,12 +273,18 @@ func TestTreeViewToggleSelectDir(t *testing.T) {
 	root := createTestTree()
 	tv := NewTreeView(root)
 
-	// Try to select a directory - should have no effect
+	// Select a directory - should work (directories can be selected for deletion)
 	tv.MoveDown() // dir1
 	tv.ToggleSelect()
 
+	if len(tv.selected) != 1 {
+		t.Error("expected directory to be selected")
+	}
+
+	// Toggle again to deselect
+	tv.ToggleSelect()
 	if len(tv.selected) != 0 {
-		t.Error("expected no selection for directory")
+		t.Error("expected directory to be deselected")
 	}
 }
 
@@ -396,14 +402,14 @@ func TestTreeViewViewIcons(t *testing.T) {
 
 	view := tv.View(80, 24)
 
-	// Collapsed dir should have collapsed icon
-	if !strings.Contains(view, iconCollapsed) {
-		t.Errorf("expected collapsed icon '%s' in view", iconCollapsed)
+	// Collapsed dir should have collapsed icon (unselected variant)
+	if !strings.Contains(view, iconDirCollapsedUnselected) {
+		t.Errorf("expected collapsed icon '%s' in view", iconDirCollapsedUnselected)
 	}
 
-	// Expanded dir should have expanded icon
-	if !strings.Contains(view, iconExpanded) {
-		t.Errorf("expected expanded icon '%s' in view", iconExpanded)
+	// Expanded dir should have expanded icon (unselected variant)
+	if !strings.Contains(view, iconDirExpandedUnselected) {
+		t.Errorf("expected expanded icon '%s' in view", iconDirExpandedUnselected)
 	}
 }
 
@@ -444,9 +450,9 @@ func TestTreeViewViewSelection(t *testing.T) {
 
 	view := tv.View(80, 24)
 
-	// Should show selection indicator
-	if !strings.Contains(view, iconSelected) {
-		t.Errorf("expected selection indicator '%s' in view", iconSelected)
+	// Should show selection indicator (filled circle for selected file)
+	if !strings.Contains(view, iconFileSelected) {
+		t.Errorf("expected selection indicator '%s' in view", iconFileSelected)
 	}
 }
 
@@ -567,19 +573,19 @@ func TestTreeViewRefresh(t *testing.T) {
 }
 
 // Size bar tests.
-func TestTreeViewSizeBarRendering(t *testing.T) {
+func TestTreeViewPercentageRendering(t *testing.T) {
 	root := createTestTree()
 	tv := NewTreeView(root)
 
 	view := tv.View(100, 24)
 
-	// View should contain size bar characters (filled and empty)
-	if !strings.Contains(view, "█") && !strings.Contains(view, "░") {
-		t.Error("expected size bar characters in view")
+	// View should contain percentage indicators
+	if !strings.Contains(view, "%") {
+		t.Error("expected percentage indicator in view")
 	}
 }
 
-func TestTreeViewSizeBarProportions(t *testing.T) {
+func TestTreeViewPercentageProportions(t *testing.T) {
 	// Create a tree with known sizes
 	root := &tree.Node{
 		Path:          "/test",
@@ -605,18 +611,17 @@ func TestTreeViewSizeBarProportions(t *testing.T) {
 		t.Error("expected non-empty view")
 	}
 
-	// The file should have some filled bar characters (roughly half)
-	// We can't test exact proportions easily, but we can verify the view exists
+	// The file should show 50% (half of root's size)
 	lines := strings.Split(view, "\n")
-	foundFileWithBar := false
+	foundFileWithPercent := false
 	for _, line := range lines {
-		if strings.Contains(line, "file.txt") && strings.Contains(line, "█") {
-			foundFileWithBar = true
+		if strings.Contains(line, "file.txt") && strings.Contains(line, "50%") {
+			foundFileWithPercent = true
 			break
 		}
 	}
-	if !foundFileWithBar {
-		t.Error("expected file to have a filled size bar")
+	if !foundFileWithPercent {
+		t.Error("expected file to show 50% percentage")
 	}
 }
 

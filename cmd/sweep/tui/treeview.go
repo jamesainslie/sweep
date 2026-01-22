@@ -213,8 +213,8 @@ func (tv *TreeView) renderEmpty(width, _ int) string {
 	return center(msg, width) + "\n"
 }
 
-// sizeBarWidth is the maximum width for the proportional size bar.
-const sizeBarWidth = 15
+// percentWidth is the width for the percentage indicator (e.g., "100%").
+const percentWidth = 4
 
 // renderNode renders a single node row.
 func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected bool) string {
@@ -257,32 +257,18 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 	// Name
 	content.WriteString(node.Name)
 
-	// Calculate proportional size bar
-	var sizeRatio float64
-	var nodeSize int64
+	// Calculate percentage of total size
+	var percent int
 	if tv.root != nil && tv.root.LargeFileSize > 0 {
+		var nodeSize int64
 		if node.IsDir {
 			nodeSize = node.LargeFileSize
 		} else {
 			nodeSize = node.Size
 		}
-		sizeRatio = float64(nodeSize) / float64(tv.root.LargeFileSize)
+		percent = int(float64(nodeSize) / float64(tv.root.LargeFileSize) * 100)
 	}
-
-	barWidth := int(sizeRatio * sizeBarWidth)
-	if barWidth > sizeBarWidth {
-		barWidth = sizeBarWidth
-	}
-	var bar string
-	switch {
-	case barWidth > 0:
-		bar = strings.Repeat("█", barWidth) + strings.Repeat("░", sizeBarWidth-barWidth)
-	case nodeSize > 0:
-		// Show at least a minimal bar for non-zero sizes
-		bar = "▏" + strings.Repeat("░", sizeBarWidth-1)
-	default:
-		bar = strings.Repeat("░", sizeBarWidth)
-	}
+	percentStr := fmt.Sprintf("%d%%", percent)
 
 	// Size (right-aligned)
 	var sizeStr string
@@ -296,24 +282,24 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 		sizeStr = formatSize(node.Size)
 	}
 
-	// Calculate padding for right alignment (bar + space + size)
+	// Calculate padding for right alignment (percent + space + size)
 	contentLen := lipgloss.Width(content.String())
-	barLen := sizeBarWidth
+	percentLen := percentWidth
 	sizeLen := lipgloss.Width(sizeStr)
-	padding := width - contentLen - barLen - sizeLen - 3 // 3 = spaces between elements
+	padding := width - contentLen - percentLen - sizeLen - 2 // 2 = spaces between elements
 	if padding < 1 {
 		padding = 1
 	}
 
-	// Build full row: content + padding + bar + space + size
-	row := content.String() + strings.Repeat(" ", padding) + bar + " " + sizeStr
+	// Build full row: content + padding + percent + space + size
+	row := content.String() + strings.Repeat(" ", padding) + fmt.Sprintf("%4s", percentStr) + " " + sizeStr
 
 	// Apply styling
 	if isCursor {
 		return treeRowHighlightStyle.Width(width).Render(row)
 	}
 
-	// Re-render with colored icon and styled bar
+	// Re-render with colored icon and muted percentage
 	var styled strings.Builder
 	styled.WriteString(indent)
 	if isSelected {
@@ -324,7 +310,7 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 	styled.WriteString(" ")
 	styled.WriteString(node.Name)
 	styled.WriteString(strings.Repeat(" ", padding))
-	styled.WriteString(treeBarStyle.Render(bar))
+	styled.WriteString(treePercentStyle.Render(fmt.Sprintf("%4s", percentStr)))
 	styled.WriteString(" ")
 	styled.WriteString(lipgloss.NewStyle().Foreground(treeSizeColor).Render(sizeStr))
 
@@ -747,9 +733,9 @@ var (
 	// Size color
 	treeSizeColor = lipgloss.Color("#00AAFF")
 
-	// Size bar style
-	treeBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7D56F4"))
+	// Percentage style (muted)
+	treePercentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#666666"))
 
 	// Staging area styles
 	treeStagingStyle = lipgloss.NewStyle().

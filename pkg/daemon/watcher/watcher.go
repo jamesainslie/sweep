@@ -222,11 +222,17 @@ func (w *Watcher) handleCreate(path string) {
 		IsDir:   info.IsDir(),
 	}
 
-	_ = w.store.Put(entry)
+	if err := w.store.Put(entry); err != nil {
+		log := logging.Get("watcher")
+		log.Debug("failed to store entry on create", "path", path, "error", err)
+	}
 
 	// Update large files index if this is a large file
 	if !info.IsDir() && w.minLargeFileSize > 0 && info.Size() >= w.minLargeFileSize {
-		_ = w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix())
+		if err := w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix()); err != nil {
+			log := logging.Get("watcher")
+			log.Debug("failed to add large file on create", "path", path, "error", err)
+		}
 	}
 
 	// Notify broadcaster for files (not directories)
@@ -250,15 +256,24 @@ func (w *Watcher) handleWrite(path string) {
 		IsDir:   info.IsDir(),
 	}
 
-	_ = w.store.Put(entry)
+	if err := w.store.Put(entry); err != nil {
+		log := logging.Get("watcher")
+		log.Debug("failed to store entry on write", "path", path, "error", err)
+	}
 
 	// Update large files index based on new size
 	if !info.IsDir() && w.minLargeFileSize > 0 {
 		if info.Size() >= w.minLargeFileSize {
-			_ = w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix())
+			if err := w.store.AddLargeFile(path, info.Size(), info.ModTime().Unix()); err != nil {
+				log := logging.Get("watcher")
+				log.Debug("failed to add large file on write", "path", path, "error", err)
+			}
 		} else {
 			// File shrank below threshold, remove from large files index
-			_ = w.store.RemoveLargeFile(path)
+			if err := w.store.RemoveLargeFile(path); err != nil {
+				log := logging.Get("watcher")
+				log.Debug("failed to remove large file on write", "path", path, "error", err)
+			}
 		}
 	}
 
@@ -316,7 +331,10 @@ func (w *Watcher) handleRemove(path string) {
 	w.mu.Unlock()
 
 	// Delete from store - this deletes the path and all children
-	_ = w.store.DeletePrefix(path)
+	if err := w.store.DeletePrefix(path); err != nil {
+		log := logging.Get("watcher")
+		log.Debug("failed to delete prefix on remove", "path", path, "error", err)
+	}
 }
 
 // Close closes the watcher and releases resources.

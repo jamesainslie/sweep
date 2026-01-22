@@ -77,7 +77,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&forceDaemon, "force-daemon", false, "fail if daemon unavailable")
 	rootCmd.PersistentFlags().BoolVar(&forceScan, "force-scan", false, "always perform direct scan, ignore daemon")
 
-	// Bind flags to viper
+	// Bind flags to viper.
+	// BindPFlag errors are ignored because they only occur if the flag doesn't exist,
+	// which would be a programming error caught during development. The flags are
+	// defined immediately above, so these calls cannot fail at runtime.
 	_ = viper.BindPFlag("min_size", rootCmd.PersistentFlags().Lookup("min-size"))
 	_ = viper.BindPFlag("workers", rootCmd.PersistentFlags().Lookup("workers"))
 	_ = viper.BindPFlag("exclude", rootCmd.PersistentFlags().Lookup("exclude"))
@@ -87,8 +90,6 @@ func init() {
 	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 	_ = viper.BindPFlag("no_cache", rootCmd.PersistentFlags().Lookup("no-cache"))
 	_ = viper.BindPFlag("no_daemon", rootCmd.PersistentFlags().Lookup("no-daemon"))
-
-	// Bind new flags to viper
 	_ = viper.BindPFlag("output", rootCmd.PersistentFlags().Lookup("output"))
 	_ = viper.BindPFlag("template", rootCmd.PersistentFlags().Lookup("template"))
 	_ = viper.BindPFlag("columns", rootCmd.PersistentFlags().Lookup("columns"))

@@ -273,7 +273,9 @@ func (s *Service) TriggerIndex(_ context.Context, req *sweepv1.TriggerIndexReque
 	// Clear existing if force
 	if req.GetForce() {
 		log.Info("force re-index requested, clearing existing data", "path", reqPath)
-		_ = s.store.DeletePrefix(reqPath)
+		if err := s.store.DeletePrefix(reqPath); err != nil {
+			log.Debug("failed to clear existing data for force re-index", "path", reqPath, "error", err)
+		}
 	}
 
 	s.indexStates[reqPath] = &indexState{
@@ -425,12 +427,16 @@ func (s *Service) ClearCache(_ context.Context, req *sweepv1.ClearCacheRequest) 
 	if reqPath == "" {
 		files, dirs, _ := s.store.CountEntries("")
 		count = files + dirs
-		_ = s.store.DeletePrefix("")
+		if err := s.store.DeletePrefix(""); err != nil {
+			log.Debug("failed to clear all cache", "error", err)
+		}
 		log.Info("cleared all cache", "entries", count)
 	} else {
 		files, dirs, _ := s.store.CountEntries(reqPath)
 		count = files + dirs
-		_ = s.store.DeletePrefix(reqPath)
+		if err := s.store.DeletePrefix(reqPath); err != nil {
+			log.Debug("failed to clear cache", "path", reqPath, "error", err)
+		}
 		log.Info("cleared cache", "path", reqPath, "entries", count)
 	}
 

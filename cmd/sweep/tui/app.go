@@ -801,6 +801,13 @@ func (m Model) renderTreeHeader(_ int) string {
 
 	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
 
+	// Show freed size if any
+	if m.lastFreedSize > 0 {
+		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
+		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
+		header = header + freed
+	}
+
 	// Show live indicator if watching
 	if m.treeWatching {
 		liveIndicator := successTextStyle.Render("  ● LIVE")

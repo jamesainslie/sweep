@@ -25,6 +25,29 @@ const (
 	iconFileUnselected = "\u25CB" // ○ White circle (outline)
 )
 
+// getNodeIcon returns the appropriate icon for a node based on its type,
+// selection state, and expansion state.
+func getNodeIcon(node *tree.Node, isSelected bool) string {
+	if !node.IsDir {
+		if isSelected {
+			return iconFileSelected
+		}
+		return iconFileUnselected
+	}
+
+	// Directory icons based on selected and expanded state
+	if isSelected {
+		if node.Expanded {
+			return iconDirExpandedSelected
+		}
+		return iconDirCollapsedSelected
+	}
+	if node.Expanded {
+		return iconDirExpandedUnselected
+	}
+	return iconDirCollapsedUnselected
+}
+
 // TreeView displays a hierarchical tree of directories and files
 // with expand/collapse, selection, and scrolling support.
 type TreeView struct {
@@ -228,29 +251,8 @@ func (tv *TreeView) renderNode(node *tree.Node, width int, isCursor, isSelected 
 	// Indentation
 	content.WriteString(indent)
 
-	// Single icon combining selection (fill) and expand state (direction)
-	var icon string
-	if node.IsDir {
-		if isSelected {
-			if node.Expanded {
-				icon = iconDirExpandedSelected // ▼
-			} else {
-				icon = iconDirCollapsedSelected // ▶
-			}
-		} else {
-			if node.Expanded {
-				icon = iconDirExpandedUnselected // ▽
-			} else {
-				icon = iconDirCollapsedUnselected // ▷
-			}
-		}
-	} else {
-		if isSelected {
-			icon = iconFileSelected // ●
-		} else {
-			icon = iconFileUnselected // ○
-		}
-	}
+	// Get icon based on node type, selection, and expansion state
+	icon := getNodeIcon(node, isSelected)
 	content.WriteString(icon)
 	content.WriteString(" ")
 

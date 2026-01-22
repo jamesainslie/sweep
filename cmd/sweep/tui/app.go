@@ -452,6 +452,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if treeRoot != nil {
 			treeRoot.Expanded = true // Expand only the root node
 			m.treeView = NewTreeView(treeRoot)
+			// Freeze elapsed time - tree is loaded, scan is done
+			if m.scanProgress.WalkCompleteElapsed == 0 && !m.scanProgress.StartTime.IsZero() {
+				m.scanProgress.WalkCompleteElapsed = time.Since(m.scanProgress.StartTime)
+			}
+			m.scanProgress.Scanning = false
 			// Keep treeMode = false, list view is default (press 't' for tree)
 			logging.Get("tui").Info("tree view loaded",
 				"nodes", len(m.treeView.flat),
@@ -762,8 +767,20 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	b.WriteString(renderDivider(contentWidth))
 	b.WriteString("\n")
 
+	// Help bar (hints) - same position as list view
+	b.WriteString(m.renderTreeHintsBar(contentWidth))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+
+	// Column headers
+	b.WriteString(m.renderTreeColumnHeaders(contentWidth))
+	b.WriteString("\n")
+	b.WriteString(renderDivider(contentWidth))
+	b.WriteString("\n")
+
 	// Calculate available height for tree content
-	// Reserve: title(1) + metrics(1) + divider(1) + staging area(1 if shown) + help(2) + padding
+	// Reserve: title(1) + metrics(1) + divider(1) + hints(1) + divider(1) + headers(1) + divider(1) + staging(1 if shown) + divider(1) + footer(1)
 	stagingHeight := 0
 	if m.treeView.HasSelection() {
 		stagingHeight = 1
@@ -772,7 +789,7 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 	if m.renderTreeMetrics() != "" {
 		metricsHeight = 1
 	}
-	treeHeight := height - 6 - stagingHeight - metricsHeight
+	treeHeight := height - 10 - stagingHeight - metricsHeight
 	if treeHeight < 5 {
 		treeHeight = 5
 	}
@@ -788,7 +805,7 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 		b.WriteString("\n")
 	}
 
-	// Help/status bar
+	// Footer/status bar
 	b.WriteString(renderDivider(contentWidth))
 	b.WriteString("\n")
 	helpText := m.renderTreeHelpBar(contentWidth)
@@ -857,6 +874,34 @@ func (m Model) renderTreeMetrics() string {
 	}
 
 	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
+}
+
+// renderTreeHintsBar renders the key hints bar for tree view mode (same as list view).
+func (m Model) renderTreeHintsBar(_ int) string {
+	hints := []struct {
+		key  string
+		desc string
+	}{
+		{"Space", "Select"},
+		{"Enter", "Expand"},
+		{"d", "Delete"},
+		{"t", "List"},
+		{"q", "Quit"},
+	}
+
+	var parts []string
+	for _, h := range hints {
+		parts = append(parts, keyStyle.Render("["+h.key+"]")+" "+keyDescStyle.Render(h.desc))
+	}
+
+	return "  " + strings.Join(parts, "  ")
+}
+
+// renderTreeColumnHeaders renders the column headers for tree view mode.
+func (m Model) renderTreeColumnHeaders(_ int) string {
+	// Match tree view layout: indent + icon + name ... % size
+	header := "     " + mutedTextStyle.Render("Name") + strings.Repeat(" ", 40) + mutedTextStyle.Render("%    Size")
+	return header
 }
 
 // renderTreeHelpBar renders the help bar for tree view mode.

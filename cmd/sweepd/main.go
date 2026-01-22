@@ -17,21 +17,25 @@ import (
 )
 
 func main() {
+	os.Exit(actualMain())
+}
+
+func actualMain() int {
 	// Ensure XDG directories exist
 	if err := config.EnsureDataDir(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create data dir: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	if err := config.EnsureStateDir(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create state dir: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Load config for logging settings
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 
 	// Initialize logging
@@ -61,7 +65,7 @@ func main() {
 	}
 	if err := logging.Init(logCfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logging: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	defer logging.Close()
 
@@ -77,11 +81,11 @@ func main() {
 	if err := daemon.RecoverFromStaleDaemon(pidPath, socketPath, dataDir); err != nil {
 		if errors.Is(err, daemon.ErrDaemonAlreadyRunning) {
 			fmt.Fprintln(os.Stderr, "sweepd is already running")
-			os.Exit(1)
+			return 1
 		}
 		log.Error("failed to recover from stale daemon", "error", err)
 		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
-		os.Exit(1)
+		return 1
 	}
 
 	// Parse min index size from config
@@ -106,14 +110,14 @@ func main() {
 	if err != nil {
 		log.Error("failed to create server", "error", err)
 		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
-		os.Exit(1)
+		return 1
 	}
 
 	// Write PID file
 	if err := daemon.WritePIDFile(pidPath); err != nil {
 		log.Error("failed to write PID file", "error", err)
 		_ = daemon.WriteStatusError(statusPath, err) // Best-effort before exit
-		os.Exit(1)
+		return 1
 	}
 	defer func() {
 		if err := daemon.RemovePIDFile(pidPath); err != nil {
@@ -148,8 +152,10 @@ func main() {
 	// Start serving
 	if err := srv.Serve(); err != nil {
 		log.Error("server error", "error", err)
-		os.Exit(1)
+		return 1
 	}
+
+	return 0
 }
 
 // parseSize parses size strings like "10MB" to bytes.

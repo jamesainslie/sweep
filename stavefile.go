@@ -77,42 +77,32 @@ func BuildDaemon() error {
 	return sh.RunV("go", "build", "-ldflags", ldflags, "-o", output, daemonPkg)
 }
 
-// Install builds and installs both sweep and sweepd to the user's GOBIN or /usr/local/bin.
+// Install builds and installs both sweep and sweepd to ~/.local/bin (or GOBIN if set).
 func Install() error {
 	st.Deps(InstallCLI, InstallDaemon)
 	return nil
 }
 
-// InstallCLI builds and installs sweep CLI to the user's GOBIN or /usr/local/bin.
+// InstallCLI builds and installs sweep CLI to ~/.local/bin (or GOBIN if set).
 func InstallCLI() error {
 	st.Deps(BuildCLI)
 	return installBinary(binaryName)
 }
 
-// InstallDaemon builds and installs sweepd daemon to the user's GOBIN or /usr/local/bin.
+// InstallDaemon builds and installs sweepd daemon to ~/.local/bin (or GOBIN if set).
 func InstallDaemon() error {
 	st.Deps(BuildDaemon)
 	return installBinary(daemonBinaryName)
 }
 
-// installBinary installs a binary to the user's GOBIN or /usr/local/bin.
+// installBinary installs a binary to ~/.local/bin (XDG user-local standard).
+// Respects GOBIN if explicitly set.
 func installBinary(name string) error {
-	gocmd := st.GoCmd()
-	bin, err := sh.Output(gocmd, "env", "GOBIN")
-	if err != nil {
-		return fmt.Errorf("determining GOBIN: %w", err)
-	}
-	if bin == "" {
-		gopath, err := sh.Output(gocmd, "env", "GOPATH")
-		if err != nil {
-			return fmt.Errorf("determining GOPATH: %w", err)
-		}
-		if gopath != "" {
-			bin = filepath.Join(gopath, "bin")
-		} else {
-			// Fallback to /usr/local/bin if GOPATH is not set.
-			bin = "/usr/local/bin"
-		}
+	bin := getInstallDir()
+
+	// Create install directory if it doesn't exist.
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		return fmt.Errorf("creating install directory %s: %w", bin, err)
 	}
 
 	src := filepath.Join(binDir, name)
@@ -132,6 +122,23 @@ func installBinary(name string) error {
 	return sh.Copy(dst, src)
 }
 
+// getInstallDir returns the installation directory.
+// Priority: GOBIN (if set) > ~/.local/bin (XDG standard).
+func getInstallDir() string {
+	gocmd := st.GoCmd()
+	if bin, err := sh.Output(gocmd, "env", "GOBIN"); err == nil && bin != "" {
+		return bin
+	}
+
+	// XDG user-local standard: ~/.local/bin
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Fallback to /usr/local/bin if home directory cannot be determined.
+		return "/usr/local/bin"
+	}
+	return filepath.Join(home, ".local", "bin")
+}
+
 // Uninstall removes both installed sweep and sweepd binaries.
 func Uninstall() error {
 	if err := uninstallBinary(binaryName); err != nil {
@@ -142,22 +149,7 @@ func Uninstall() error {
 
 // uninstallBinary removes an installed binary.
 func uninstallBinary(name string) error {
-	gocmd := st.GoCmd()
-	bin, err := sh.Output(gocmd, "env", "GOBIN")
-	if err != nil {
-		return fmt.Errorf("determining GOBIN: %w", err)
-	}
-	if bin == "" {
-		gopath, err := sh.Output(gocmd, "env", "GOPATH")
-		if err != nil {
-			return fmt.Errorf("determining GOPATH: %w", err)
-		}
-		if gopath != "" {
-			bin = filepath.Join(gopath, "bin")
-		} else {
-			bin = "/usr/local/bin"
-		}
-	}
+	bin := getInstallDir()
 
 	target := filepath.Join(bin, name)
 	if runtime.GOOS == "windows" {

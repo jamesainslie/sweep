@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/dustin/go-humanize"
 	"github.com/jamesainslie/sweep/pkg/client"
 	"github.com/jamesainslie/sweep/pkg/daemon/tree"
 	"github.com/jamesainslie/sweep/pkg/sweep/filter"
@@ -819,10 +818,6 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 
 // renderTreeHeader renders the header for tree view mode (same style as flat list).
 func (m Model) renderTreeHeader(_ int) string {
-	// Icon and app name
-	icon := "🧹"
-	appName := titleStyle.Bold(true).Render("SWEEP")
-
 	// Stats from tree
 	var fileCount int
 	var totalSize int64
@@ -830,53 +825,19 @@ func (m Model) renderTreeHeader(_ int) string {
 		fileCount = m.treeView.root.LargeFileCount
 		totalSize = m.treeView.root.LargeFileSize
 	}
-	stats := mutedTextStyle.Render(fmt.Sprintf("  %d files  •  %s", fileCount, types.FormatSize(totalSize)))
-
-	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
-
-	// Show freed size if any
-	if m.lastFreedSize > 0 {
-		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
-		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
-		header = header + freed
-	}
-
-	// Show live indicator if watching
-	if m.treeWatching {
-		liveIndicator := successTextStyle.Render("  ● LIVE")
-		header = header + liveIndicator
-	}
-
-	return header
+	return renderAppHeader(fileCount, totalSize, m.lastFreedSize, m.treeWatching)
 }
 
 // renderTreeMetrics renders the scan metrics line for tree view mode.
 func (m Model) renderTreeMetrics() string {
-	var parts []string
-
-	// Dirs and files scanned
-	if m.scanProgress.DirsScanned > 0 || m.scanProgress.FilesScanned > 0 {
-		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
-			humanize.Comma(m.scanProgress.DirsScanned),
-			humanize.Comma(m.scanProgress.FilesScanned)))
-	}
-
-	// Elapsed time
+	// Calculate elapsed time
 	var elapsed time.Duration
 	if m.scanProgress.WalkCompleteElapsed > 0 {
 		elapsed = m.scanProgress.WalkCompleteElapsed
 	} else if !m.scanProgress.StartTime.IsZero() {
 		elapsed = time.Since(m.scanProgress.StartTime)
 	}
-	if elapsed > 0 {
-		parts = append(parts, fmt.Sprintf("Time: %v", elapsed.Round(time.Millisecond)))
-	}
-
-	if len(parts) == 0 {
-		return ""
-	}
-
-	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
+	return renderScanMetrics(m.scanProgress.DirsScanned, m.scanProgress.FilesScanned, elapsed)
 }
 
 // renderTreeHintsBar renders the key hints bar for tree view mode (same as list view).

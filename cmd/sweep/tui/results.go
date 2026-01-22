@@ -10,7 +10,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/dustin/go-humanize"
 	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 	"github.com/jamesainslie/sweep/pkg/sweep/types"
 )
@@ -216,48 +215,12 @@ func (m ResultModel) renderEmpty() string {
 
 // renderHeader renders the header.
 func (m ResultModel) renderHeader(_ int) string {
-	// Icon and app name
-	icon := "🧹"
-	appName := titleStyle.Bold(true).Render("SWEEP")
-
-	// Stats in muted style
-	fileCount := fmt.Sprintf("%d files", len(m.files))
-	totalSize := types.FormatSize(m.TotalSize())
-	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
-
-	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
-
-	// Show freed size if any
-	if m.lastFreedSize > 0 {
-		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
-		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
-		header = header + freed
-	}
-
-	return header
+	return renderAppHeader(len(m.files), m.TotalSize(), m.lastFreedSize, false)
 }
 
 // renderMetrics renders the scan metrics line.
 func (m ResultModel) renderMetrics(_ int) string {
-	var parts []string
-
-	// Dirs and files scanned
-	if m.metrics.DirsScanned > 0 || m.metrics.FilesScanned > 0 {
-		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
-			humanize.Comma(m.metrics.DirsScanned),
-			humanize.Comma(m.metrics.FilesScanned)))
-	}
-
-	// Elapsed time
-	if m.metrics.Elapsed > 0 {
-		parts = append(parts, fmt.Sprintf("Time: %v", m.metrics.Elapsed.Round(time.Millisecond)))
-	}
-
-	if len(parts) == 0 {
-		return ""
-	}
-
-	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
+	return renderScanMetrics(m.metrics.DirsScanned, m.metrics.FilesScanned, m.metrics.Elapsed)
 }
 
 // renderHelpBar renders the help bar with key hints.
@@ -787,30 +750,7 @@ func (m ResultModel) ViewWithProgressAndNotifications(
 
 // renderHeaderWithLive renders the header with an optional live indicator.
 func (m ResultModel) renderHeaderWithLive(_ int, liveWatching bool) string {
-	// Icon and app name
-	icon := "🧹"
-	appName := titleStyle.Bold(true).Render("SWEEP")
-
-	// Stats in muted style
-	fileCount := fmt.Sprintf("%d files", len(m.files))
-	totalSize := types.FormatSize(m.TotalSize())
-	stats := mutedTextStyle.Render(fmt.Sprintf("  %s  •  %s", fileCount, totalSize))
-
-	header := fmt.Sprintf(" %s %s%s", icon, appName, stats)
-
-	// Show freed size if any
-	if m.lastFreedSize > 0 {
-		freedStyle := lipgloss.NewStyle().Foreground(successColor).Bold(true)
-		freed := freedStyle.Render(fmt.Sprintf("  ✓ Freed %s", types.FormatSize(m.lastFreedSize)))
-		header = header + freed
-	}
-
-	if liveWatching {
-		liveIndicator := successTextStyle.Render("  ● LIVE")
-		header = header + liveIndicator
-	}
-
-	return header
+	return renderAppHeader(len(m.files), m.TotalSize(), m.lastFreedSize, liveWatching)
 }
 
 // Notification icons (Unicode symbols, not emoji).
@@ -874,21 +814,13 @@ func (m ResultModel) renderNotifications(width int, notifications []Notification
 }
 
 // renderMetricsWithProgress renders metrics including real-time progress.
-func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress) string {
-	var parts []string
-
+func (m ResultModel) renderMetricsWithProgress(_ int, progress ScanProgress) string {
 	// Dirs and files scanned (prefer progress over final metrics during scanning).
 	dirsScanned := m.metrics.DirsScanned
 	filesScanned := m.metrics.FilesScanned
 	if progress.Scanning {
 		dirsScanned = progress.DirsScanned
 		filesScanned = progress.FilesScanned
-	}
-
-	if dirsScanned > 0 || filesScanned > 0 {
-		parts = append(parts, fmt.Sprintf("Scanned: %s dirs, %s files",
-			humanize.Comma(dirsScanned),
-			humanize.Comma(filesScanned)))
 	}
 
 	// Elapsed time.
@@ -903,16 +835,8 @@ func (m ResultModel) renderMetricsWithProgress(width int, progress ScanProgress)
 	} else {
 		elapsed = m.metrics.Elapsed
 	}
-	if elapsed > 0 {
-		parts = append(parts, fmt.Sprintf("Time: %v", elapsed.Round(time.Millisecond)))
-	}
 
-	if len(parts) == 0 {
-		return ""
-	}
-
-	_ = width // Suppress unused warning, parameter kept for consistency.
-	return mutedTextStyle.Render("  " + strings.Join(parts, "  |  "))
+	return renderScanMetrics(dirsScanned, filesScanned, elapsed)
 }
 
 // renderFooterWithProgressAndHint renders the footer with selection summary, scan status, and status hint.

@@ -817,14 +817,13 @@ func (m Model) renderTreeViewWithHeight(height int) string {
 }
 
 // renderTreeHeader renders the header for tree view mode (same style as flat list).
+// Uses resultModel for file count/size to ensure consistency with list view
+// (both apply the same filter).
 func (m Model) renderTreeHeader(_ int) string {
-	// Stats from tree
-	var fileCount int
-	var totalSize int64
-	if m.treeView != nil && m.treeView.root != nil {
-		fileCount = m.treeView.root.LargeFileCount
-		totalSize = m.treeView.root.LargeFileSize
-	}
+	// Use resultModel for consistent file count with list view
+	// (both have the same filter applied)
+	fileCount := len(m.resultModel.files)
+	totalSize := m.resultModel.TotalSize()
 	return renderAppHeader(fileCount, totalSize, m.lastFreedSize, m.treeWatching)
 }
 

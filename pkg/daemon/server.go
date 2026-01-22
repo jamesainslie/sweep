@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"github.com/jamesainslie/sweep/pkg/daemon/indexer"
 	"github.com/jamesainslie/sweep/pkg/daemon/store"
 	"github.com/jamesainslie/sweep/pkg/daemon/watcher"
+	"github.com/jamesainslie/sweep/pkg/sweep/logging"
 )
 
 // Config holds daemon configuration.
@@ -209,7 +209,8 @@ func (s *Server) startMigration(threshold int64) {
 	s.migrationMu.Unlock()
 
 	go func() {
-		log.Printf("Starting database migration...")
+		log := logging.Get("daemon")
+		log.Info("starting database migration")
 
 		onProgress := func(p store.MigrationProgress) {
 			s.migrationMu.Lock()
@@ -218,8 +219,10 @@ func (s *Server) startMigration(threshold int64) {
 
 			if p.EntriesTotal > 0 {
 				pct := float64(p.EntriesDone) / float64(p.EntriesTotal) * 100
-				log.Printf("Migration progress: %.1f%% (%d/%d entries)",
-					pct, p.EntriesDone, p.EntriesTotal)
+				log.Debug("migration progress",
+					"percent", pct,
+					"done", p.EntriesDone,
+					"total", p.EntriesTotal)
 			}
 		}
 
@@ -233,9 +236,9 @@ func (s *Server) startMigration(threshold int64) {
 		s.migrationMu.Unlock()
 
 		if err != nil {
-			log.Printf("Migration failed: %v", err)
+			log.Error("migration failed", "error", err)
 		} else {
-			log.Printf("Migration completed: %d migrations run", count)
+			log.Info("migration completed", "migrations_run", count)
 		}
 	}()
 }

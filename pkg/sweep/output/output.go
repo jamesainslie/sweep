@@ -202,3 +202,100 @@ func Get(name string) (Formatter, error) {
 func Available() []string {
 	return DefaultRegistry.Available()
 }
+
+// StructuredOutput represents the common output structure used by
+// structured formatters (JSON, YAML). This type provides dual tags
+// for both JSON and YAML encoding.
+type StructuredOutput struct {
+	Files []StructuredFile `json:"files" yaml:"files"`
+	Stats StructuredStats  `json:"stats" yaml:"stats"`
+	Meta  StructuredMeta   `json:"meta" yaml:"meta"`
+}
+
+// StructuredFile represents a file in structured output formats.
+type StructuredFile struct {
+	Path      string    `json:"path" yaml:"path"`
+	Name      string    `json:"name,omitempty" yaml:"name,omitempty"`
+	Dir       string    `json:"dir,omitempty" yaml:"dir,omitempty"`
+	Ext       string    `json:"ext,omitempty" yaml:"ext,omitempty"`
+	Size      int64     `json:"size" yaml:"size"`
+	SizeHuman string    `json:"size_human" yaml:"size_human"`
+	ModTime   time.Time `json:"mod_time,omitempty" yaml:"mod_time,omitempty"`
+	Age       string    `json:"age,omitempty" yaml:"age,omitempty"`
+	Perms     string    `json:"perms,omitempty" yaml:"perms,omitempty"`
+	Owner     string    `json:"owner,omitempty" yaml:"owner,omitempty"`
+	Depth     int       `json:"depth,omitempty" yaml:"depth,omitempty"`
+}
+
+// StructuredStats represents scan statistics in structured output formats.
+type StructuredStats struct {
+	DirsScanned  int64  `json:"dirs_scanned" yaml:"dirs_scanned"`
+	FilesScanned int64  `json:"files_scanned" yaml:"files_scanned"`
+	LargeFiles   int64  `json:"large_files" yaml:"large_files"`
+	Duration     string `json:"duration" yaml:"duration"`
+}
+
+// StructuredMeta represents metadata in structured output formats.
+type StructuredMeta struct {
+	Source      string   `json:"source" yaml:"source"`
+	IndexAge    string   `json:"index_age,omitempty" yaml:"index_age,omitempty"`
+	DaemonUp    bool     `json:"daemon_up" yaml:"daemon_up"`
+	WatchActive bool     `json:"watch_active" yaml:"watch_active"`
+	TotalFiles  int      `json:"total_files" yaml:"total_files"`
+	TotalSize   int64    `json:"total_size" yaml:"total_size"`
+	Warnings    []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Interrupted bool     `json:"interrupted" yaml:"interrupted"`
+}
+
+// BuildStructuredOutput converts a Result to the common StructuredOutput format.
+// This is used by both JSONFormatter and YAMLFormatter to avoid code duplication.
+func BuildStructuredOutput(r *Result) StructuredOutput {
+	files := make([]StructuredFile, len(r.Files))
+	for i, file := range r.Files {
+		files[i] = StructuredFile{
+			Path:      file.Path,
+			Name:      file.Name,
+			Dir:       file.Dir,
+			Ext:       file.Ext,
+			Size:      file.Size,
+			SizeHuman: file.SizeHuman,
+			ModTime:   file.ModTime,
+			Age:       FormatDurationString(file.Age),
+			Perms:     file.Perms,
+			Owner:     file.Owner,
+			Depth:     file.Depth,
+		}
+	}
+
+	stats := StructuredStats{
+		DirsScanned:  r.Stats.DirsScanned,
+		FilesScanned: r.Stats.FilesScanned,
+		LargeFiles:   r.Stats.LargeFiles,
+		Duration:     FormatDurationString(r.Stats.Duration),
+	}
+
+	meta := StructuredMeta{
+		Source:      r.Source,
+		IndexAge:    FormatDurationString(r.IndexAge),
+		DaemonUp:    r.DaemonUp,
+		WatchActive: r.WatchActive,
+		TotalFiles:  r.TotalFiles,
+		TotalSize:   r.TotalSize(),
+		Warnings:    r.Warnings,
+		Interrupted: r.Interrupted,
+	}
+
+	return StructuredOutput{
+		Files: files,
+		Stats: stats,
+		Meta:  meta,
+	}
+}
+
+// FormatDurationString formats a duration as a string for structured output.
+func FormatDurationString(d time.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	return d.String()
+}

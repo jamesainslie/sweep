@@ -461,7 +461,7 @@ func StartDaemon(paths DaemonPaths) error {
 	_ = os.Remove(statusPath)
 
 	// Use exec.Command (not CommandContext) intentionally: daemon must outlive caller
-	cmd := exec.Command(binary) //nolint:gosec // binary path is validated
+	cmd := exec.Command(binary)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil

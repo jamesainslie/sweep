@@ -320,7 +320,10 @@ linters:
     rules:
       - linters:
           - govet
-        text: 'shadow: declaration of "(err|ctx)" shadows declaration at'
+        text: 'shadow: declaration of "(err|ctx|limit)" shadows declaration at'
+      - linters:
+          - govet
+        text: unusedwrite
       - linters:
           - godot
         source: (noinspection|TODO)
@@ -341,6 +344,11 @@ linters:
           - mnd
           - unparam
           - unconvert
+          - errcheck
+          - testifylint
+          - revive
+          - godot
+          - forcetypeassert
         path: _test\.go$
       - linters:
           - forbidigo
@@ -375,6 +383,11 @@ linters:
           - prealloc
           - funlen
           - gosec
+          - gocyclo
+          - lll
+          - perfsprint
+          - cyclop
+          - maintidx
         path: ^cmd/
       - linters:
           - varnamelen
@@ -387,6 +400,14 @@ linters:
           - gosec
           - intrange
           - unparam
+          - gochecknoinits
+          - goconst
+          - prealloc
+          - unused
+          - funlen
+          - gocognit
+          - gocritic
+          - noctx
         path: ^pkg/
       - linters:
           - revive

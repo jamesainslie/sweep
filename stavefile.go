@@ -19,11 +19,12 @@ var Default = Build
 
 // Aliases for common targets.
 var Aliases = map[string]interface{}{
-	"b": Build,
-	"t": Test,
-	"l": Lint,
-	"i": Install,
-	"c": Clean,
+	"b":     Build,
+	"t":     Test,
+	"l":     Lint,
+	"i":     Install,
+	"c":     Clean,
+	"check": Check,
 }
 
 const (
@@ -39,6 +40,35 @@ func All() error {
 	st.Deps(Lint, Test)
 	st.Deps(Build)
 	return nil
+}
+
+// Check runs the CI pipeline locally: lint, test, and build.
+// This mirrors the GitHub Actions checks workflow for local verification.
+func Check() error {
+	fmt.Println("Running CI checks...")
+
+	fmt.Println("\n=== Lint ===")
+	if err := Lint(); err != nil {
+		return fmt.Errorf("lint failed: %w", err)
+	}
+
+	fmt.Println("\n=== Test ===")
+	if err := TestCoverage(); err != nil {
+		return fmt.Errorf("test failed: %w", err)
+	}
+
+	fmt.Println("\n=== Build ===")
+	if err := Build(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	fmt.Println("\n✓ All checks passed")
+	return nil
+}
+
+// TestCoverage runs tests with race detection and generates coverage output.
+func TestCoverage() error {
+	return sh.RunV("go", "tool", "gotestsum", "-f", "pkgname-and-test-fails", "--", "./...", "-race", "-coverprofile=coverage.out", "-covermode=atomic")
 }
 
 // Build compiles both sweep and sweepd binaries.

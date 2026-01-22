@@ -51,10 +51,6 @@ var (
 	// successTextStyle for success messages.
 	successTextStyle = lipgloss.NewStyle().
 				Foreground(successColor)
-
-	// warningTextStyle for warning messages.
-	warningTextStyle = lipgloss.NewStyle().
-				Foreground(warningColor)
 )
 
 // File list styles are now handled by the bubbles/table component.
@@ -98,42 +94,6 @@ var (
 	// keyDescStyle for key descriptions.
 	keyDescStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
-)
-
-// Confirmation dialog styles.
-var (
-	// dialogBoxStyle for modal dialogs.
-	dialogBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(warningColor).
-			Padding(1, 2).
-			Width(50)
-
-	// dialogTitleStyle for dialog titles.
-	dialogTitleStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(warningColor).
-				Align(lipgloss.Center)
-
-	// dialogTextStyle for dialog content.
-	dialogTextStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFFFF")).
-			Align(lipgloss.Center)
-
-	// activeButtonStyle for the active/focused button.
-	activeButtonStyle = lipgloss.NewStyle().
-				Padding(0, 2).
-				Margin(0, 1).
-				Background(dangerColor).
-				Foreground(lipgloss.Color("#FFFFFF")).
-				Bold(true)
-
-	// inactiveButtonStyle for inactive buttons.
-	inactiveButtonStyle = lipgloss.NewStyle().
-				Padding(0, 2).
-				Margin(0, 1).
-				Background(subtleColor).
-				Foreground(lipgloss.Color("#CCCCCC"))
 )
 
 // renderDivider creates a horizontal divider line.

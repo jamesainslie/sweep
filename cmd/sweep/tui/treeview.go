@@ -16,9 +16,9 @@ import (
 // Fill indicates selection, direction indicates expand state.
 const (
 	// Directories: filled = selected, outline = unselected
-	iconDirExpandedSelected   = "\u25BC" // ▼ Black down-pointing triangle
-	iconDirCollapsedSelected  = "\u25B6" // ▶ Black right-pointing triangle
-	iconDirExpandedUnselected = "\u25BD" // ▽ White down-pointing triangle
+	iconDirExpandedSelected    = "\u25BC" // ▼ Black down-pointing triangle
+	iconDirCollapsedSelected   = "\u25B6" // ▶ Black right-pointing triangle
+	iconDirExpandedUnselected  = "\u25BD" // ▽ White down-pointing triangle
 	iconDirCollapsedUnselected = "\u25B7" // ▷ White right-pointing triangle
 	// Files: filled = selected, outline = unselected
 	iconFileSelected   = "\u25CF" // ● Black circle (filled)
